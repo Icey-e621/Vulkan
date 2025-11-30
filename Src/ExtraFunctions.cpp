@@ -15,7 +15,6 @@ std::vector<const char *> getRequiredExtensions()
 
     return extensions;
 }
-
 // i think this one may be one of the ONLY one that NEEDS to be here
 VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkDebugUtilsMessengerEXT *pDebugMessenger)
 {
