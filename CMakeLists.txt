@@ -12,7 +12,7 @@ find_package(Vulkan REQUIRED)
 # HERE WE ARE GONNA COMPILE SHADERS
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 file(GLOB SHADERS ${SHADER_DIR}/*.vert ${SHADER_DIR}/*.frag ${SHADER_DIR}/*.glsl)
-set(Vulkan_GLSLC_EXECUTABLE "C:\\VulkanSDK\\1.4.321.1\\Bin\\glslc.exe")
+set(Vulkan_GLSLC_EXECUTABLE "glslc")
 
 foreach(SHADER IN LISTS SHADERS)
     get_filename_component(EXT ${SHADER} EXT)

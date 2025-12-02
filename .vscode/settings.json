@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "Justfile - windows": "just",
+        "stdexcept": "cpp"
+    }
+}

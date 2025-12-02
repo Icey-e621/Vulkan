@@ -270,8 +270,8 @@ private:
      */
     void createGraphicsPipeline()
     {
-        auto vertShaderCode = readFile("../shaders/vert.spv"); // stream of bytes
-        auto fragShaderCode = readFile("../shaders/frag.spv");
+        auto vertShaderCode = readFile("../../../shaders/vert.spv"); // stream of bytes
+        auto fragShaderCode = readFile("../../../shaders/frag.spv");
 
         VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -636,7 +636,7 @@ private:
             swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-        return isNotIGPU &&
+        return //isNotIGPU &&
                deviceFeatures.geometryShader &&
                indices.isComplete() &&
                extensionsSupported &&
