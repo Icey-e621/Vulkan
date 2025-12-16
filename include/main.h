@@ -6,6 +6,10 @@
 // #define GLFW_EXPOSE_NATIVE_WIN32
 // #include <GLFW/glfw3native.h>
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <array>
+#include <glm/gtc/matrix_transform.hpp>
+#include <chrono>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <iostream>
@@ -18,6 +22,8 @@
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
 #include <fstream> // to load shaders
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 const extern std::vector<const char *> validationLayers;
 const extern bool enableValidationLayers;

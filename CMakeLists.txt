@@ -5,6 +5,8 @@ project(HelloTriangle)
 set(CMAKE_C_STANDARD 20)
 set(CMAKE_CXX_STANDARD 20)
 
+include(FetchContent)
+
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(Vulkan REQUIRED)
