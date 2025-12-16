@@ -1,4 +1,0 @@
-/home/icey/vulkan/Vulkan/CMakeFiles/shaders.dir
-/home/icey/vulkan/Vulkan/CMakeFiles/Main.dir
-/home/icey/vulkan/Vulkan/CMakeFiles/edit_cache.dir
-/home/icey/vulkan/Vulkan/CMakeFiles/rebuild_cache.dir
