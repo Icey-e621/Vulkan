@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/Main.dir/Src/ExtraFunctions.cpp.o CMakeFiles/Main.dir/Src/ValidationLayers.cpp.o CMakeFiles/Main.dir/Src/main.cpp.o -o Main  /usr/lib/x86_64-linux-gnu/libvulkan.so /usr/lib/x86_64-linux-gnu/libglfw.so.3.3 

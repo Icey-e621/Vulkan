@@ -16,7 +16,16 @@ set(Vulkan_GLSLC_EXECUTABLE "glslc")
 
 foreach(SHADER IN LISTS SHADERS)
     get_filename_component(EXT ${SHADER} EXT)
+    get_filename_component(FULLPATH ${SHADER} ABSOLUTE)
     string(REPLACE "." "" NOPEXT "${EXT}")
+    if(${NOPEXT} STREQUAL "frag")
+        message(STATUS "FRAG_SHADER='${FULLPATH}'")
+        set(FRAG_SHADER ${FULLPATH})
+    else()
+        message(STATUS "VERT_SHADER='${FULLPATH}'")
+        set(VERT_SHADER ${FULLPATH})
+    endif()
+    
     add_custom_command(OUTPUT ${SHADER_DIR}/${NOPEXT}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SHADER_DIR}/${NOPEXT}.spv
         DEPENDS ${SHADER}
@@ -30,6 +39,8 @@ add_custom_target(shaders ALL DEPENDS ${SPV_SHADERS})
 file(GLOB SOURCE_FILES "Src/*.cpp")
 
 add_executable(Main ${SOURCE_FILES} ${SHADERS})
+target_compile_definitions(Main PRIVATE VERT_SHADER='"${VERT_SHADER}"' FRAG_SHADER='"${FRAG_SHADER}"')
+
 
 target_include_directories(Main PRIVATE include/)
 

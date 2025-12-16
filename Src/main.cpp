@@ -270,8 +270,18 @@ private:
      */
     void createGraphicsPipeline()
     {
+#ifdef VERT_SHADER
+        std::cout << "SHADER VERT = " << VERT_SHADER;
+        auto vertShaderCode = readFile(VERT_SHADER); // stream of bytes
+#elif
         auto vertShaderCode = readFile("../../../shaders/vert.spv"); // stream of bytes
+#endif
+#ifdef FRAG_SHADER
+        std::cout << "SHADER FRAG = " << FRAG_SHADER;
+        auto fragShaderCode = readFile(FRAG_SHADER);
+#elif
         auto fragShaderCode = readFile("../../../shaders/frag.spv");
+#endif
 
         VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -981,7 +991,7 @@ private:
 
         if (!file.is_open())
         {
-            throw std::runtime_error("failed to open file!");
+            throw std::runtime_error("failed to open file: "+filename);
         }
 
         size_t fileSize = (size_t)file.tellg();
