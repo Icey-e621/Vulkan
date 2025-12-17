@@ -5,8 +5,6 @@ project(HelloTriangle)
 set(CMAKE_C_STANDARD 20)
 set(CMAKE_CXX_STANDARD 20)
 
-include(FetchContent)
-
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -14,7 +12,7 @@ find_package(Vulkan REQUIRED)
 # HERE WE ARE GONNA COMPILE SHADERS
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 file(GLOB SHADERS ${SHADER_DIR}/*.vert ${SHADER_DIR}/*.frag ${SHADER_DIR}/*.glsl)
-set(Vulkan_GLSLC_EXECUTABLE "C:\\VulkanSDK\\1.4.321.1\\Bin\\glslc.exe")
+set(Vulkan_GLSLC_EXECUTABLE "glslc")
 
 foreach(SHADER IN LISTS SHADERS)
     get_filename_component(EXT ${SHADER} EXT)
@@ -26,12 +24,12 @@ foreach(SHADER IN LISTS SHADERS)
 list(APPEND SPV_SHADERS ${SHADER_DIR}/${NOPEXT}.spv)
 endForeach()
 
-add_custom_target(shaders ALL DEPENDS ${SPV_SHADERS})
+add_custom_target(Shaders ALL DEPENDS ${SPV_SHADERS})
 # HERE WE END COMPILING SHADERS
 
 file(GLOB SOURCE_FILES "Src/*.cpp")
 
-add_executable(Main ${SOURCE_FILES} ${SHADERS})
+add_executable(Main ${SOURCE_FILES})
 
 target_include_directories(Main PRIVATE include/)
 
@@ -45,4 +43,4 @@ target_link_libraries(Main
         glfw
         glm::glm
 )
-add_dependencies(Main shaders)
+add_dependencies(Main Shaders)
