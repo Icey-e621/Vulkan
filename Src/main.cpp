@@ -37,7 +37,7 @@ struct Vertex
     bool operator==(const Vertex &other) const
     {
         return pos == other.pos && color == other.color && texCoord == other.texCoord;
-    }   
+    }
 
     static VkVertexInputBindingDescription getBindingDescription()
     {
@@ -71,11 +71,16 @@ struct Vertex
         return attributeDescriptions;
     }
 };
-namespace std {
-    template<> struct hash<Vertex> {
-        size_t operator()(Vertex const& vertex) const {
+namespace std
+{
+    template <>
+    struct hash<Vertex>
+    {
+        size_t operator()(Vertex const &vertex) const
+        {
             return ((hash<glm::vec3>()(vertex.pos) ^
-                   (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+                     (hash<glm::vec3>()(vertex.color) << 1)) >>
+                    1) ^
                    (hash<glm::vec2>()(vertex.texCoord) << 1);
         }
     };
@@ -421,23 +426,14 @@ private:
             {
                 Vertex vertex{};
 
-                // Position is usually safe
                 vertex.pos = {
                     attrib.vertices[3 * index.vertex_index + 0],
                     attrib.vertices[3 * index.vertex_index + 1],
                     attrib.vertices[3 * index.vertex_index + 2]};
 
-                // SAFETY CHECK: Only load UVs if they exist
-                if (index.texcoord_index >= 0)
-                {
-                    vertex.texCoord = {
-                        attrib.texcoords[2 * index.texcoord_index + 0],
-                        1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
-                }
-                else
-                {
-                    vertex.texCoord = {0.0f, 0.0f}; // Default value if missing
-                }
+                vertex.texCoord = {
+                    attrib.texcoords[2 * index.texcoord_index + 0],
+                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
 
                 vertex.color = {1.0f, 1.0f, 1.0f};
 
@@ -653,9 +649,9 @@ private:
 
             // bind uniformbuffer
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
-            vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
             vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
         }
         vkCmdEndRenderPass(commandBuffer);
@@ -1353,7 +1349,6 @@ private:
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
         VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
         VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -1362,6 +1357,7 @@ private:
         submitInfo.pWaitDstStageMask = waitStages;
 
         submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
         VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
         submitInfo.signalSemaphoreCount = 1;
@@ -1381,8 +1377,8 @@ private:
         VkSwapchainKHR swapChains[] = {swapChain};
         presentInfo.swapchainCount = 1;
         presentInfo.pSwapchains = swapChains;
+
         presentInfo.pImageIndices = &imageIndex;
-        // presentInfo.pResults = nullptr; // Optional
 
         // no error handling on uploading to swapchain since it does no crash the program like everything else does
         result = vkQueuePresentKHR(presentQueue, &presentInfo);
@@ -1396,8 +1392,6 @@ private:
         {
             throw std::runtime_error("failed to present swap chain image!");
         }
-
-        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
