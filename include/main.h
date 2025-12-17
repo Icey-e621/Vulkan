@@ -8,6 +8,8 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 #include <GLFW/glfw3native.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -26,6 +28,7 @@
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
 #include <fstream> // to load shaders
+#include <algorithm> // i want to use them ok
 
 const extern std::vector<const char *> validationLayers;
 const extern bool enableValidationLayers;

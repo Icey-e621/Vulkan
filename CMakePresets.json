@@ -8,20 +8,32 @@
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_C_COMPILER": "cl.exe",
-        "CMAKE_CXX_COMPILER": "cl.exe"
+        "CMAKE_CXX_COMPILER": "cl.exe",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "vcpkg",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe",
+        "CMAKE_BUILD_TYPE": "Release"
       }
     }
   ],
   "buildPresets": [
     {
       "name": "debug",
-      "displayName": "Visual Studio Community 2022 Release - amd64_x86 - Debug",
+      "displayName": "Debug",
       "configurePreset": "vcpkg",
       "configuration": "Debug"
     },
     {
       "name": "release",
-      "displayName": "Visual Studio Community 2022 Release - amd64_x86 - Release",
+      "displayName": "Release",
       "configurePreset": "vcpkg",
       "configuration": "Release"
     }
