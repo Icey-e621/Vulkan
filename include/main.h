@@ -29,6 +29,7 @@
 #include <algorithm> // Necessary for std::clamp
 #include <fstream> // to load shaders
 #include <algorithm> // i want to use them ok
+#include <random> // random stuff
 
 const extern std::vector<const char *> validationLayers;
 const extern bool enableValidationLayers;
@@ -39,10 +40,11 @@ struct QueueFamilyIndices
 {
     std::optional<uint32_t> graphicsFamily;
     std::optional<uint32_t> presentFamily;
+    std::optional<uint32_t> ComputeFamily;
 
     bool isComplete()
     {
-        return graphicsFamily.has_value() && presentFamily.has_value(); 
+        return graphicsFamily.has_value() && presentFamily.has_value() && ComputeFamily.has_value(); 
     }
 };
 //SWAP CHAIN STRUCT
