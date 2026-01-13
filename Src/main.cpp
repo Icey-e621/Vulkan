@@ -10,7 +10,7 @@
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
-constexpr uint32_t PARTICLE_COUNT = 4096 * 4096;
+constexpr uint32_t PARTICLE_COUNT = 4096*1024;
 
 // max queued frames
 const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -194,6 +194,10 @@ private:
     bool framebufferResized = false;
 
     double lastTime = 0.0f;
+    // FPS counter
+    int fps = 0;
+    int frameCounter = 0;
+    double fpsLastTime = 0.0;
 
 #pragma endregion Members
 
@@ -208,6 +212,9 @@ private:
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 
         lastTime = glfwGetTime();
+        fpsLastTime = lastTime;
+        frameCounter = 0;
+        fps = 0;
     }
 
     void initVulkan()
@@ -841,46 +848,6 @@ private:
             }
         }
     }
-    void createComputeShaderBuffer()
-    {
-        VkDeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
-
-        shaderStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-        shaderStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-
-        // Initialize particles
-        std::default_random_engine rndEngine((unsigned)time(nullptr));
-        std::uniform_real_distribution<float> rndDist(0.0f, 1.0f);
-
-        // Initial particle positions on a circle
-        std::vector<Particle> particles(PARTICLE_COUNT);
-        for (auto &particle : particles)
-        {
-            float r = 0.25f * sqrt(rndDist(rndEngine));
-            float theta = rndDist(rndEngine) * 2 * 3.14159265358979323846;
-            float x = r * cos(theta) * HEIGHT / WIDTH;
-            float y = r * sin(theta);
-            particle.position = glm::vec2(x, y);
-            particle.velocity = glm::normalize(glm::vec2(x, y)) * 0.00025f;
-            particle.color = glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);
-        }
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        void *data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, particles.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-        {
-            createBuffer(bufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shaderStorageBuffers[i], shaderStorageBuffersMemory[i]);
-            // Copy data from the staging buffer (host) to the shader storage buffer (GPU)
-            copyBuffer(stagingBuffer, shaderStorageBuffers[i], bufferSize);
-        }
-    }
     // buffer creator funcs
     /**
      * @brief Create a Uniform Buffers object
@@ -949,11 +916,31 @@ private:
 
         vkDeviceWaitIdle(device);
 
+        // Destroy old swapchain and its image-related semaphores, they'll be recreated
+        // to match the new swapchain image count.
+        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
+        {
+            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+        }
+        renderFinishedSemaphores.clear();
+
         cleanupSwapChain();
 
         createSwapChain();
         createImageViews();
         createFramebuffers();
+
+        // Recreate per-image render-finished semaphores for the new swapchain
+        VkSemaphoreCreateInfo semaphoreInfo{};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        renderFinishedSemaphores.resize(swapChainImages.size());
+        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
+        {
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("failed to create renderFinished semaphore during swapchain recreation!");
+            }
+        }
     }
     // end buffer creator funcs
     void createDescriptorPool()
@@ -1081,29 +1068,7 @@ private:
 
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[currentFrame], 0, nullptr);
 
-        // Compute dispatch counts based on shader local size (must match shader: local_size_x = 256)
-        const uint32_t WG_X = 256u;
-        uint32_t totalGroups = (PARTICLE_COUNT + WG_X - 1) / WG_X; // ceil division
-
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(physicalDevice, &props);
-        uint32_t maxX = props.limits.maxComputeWorkGroupCount[0];
-        uint32_t maxY = props.limits.maxComputeWorkGroupCount[1];
-
-        uint32_t dispatchX = totalGroups;
-        uint32_t dispatchY = 1;
-
-        if (dispatchX > maxX) {
-            // split into 2D groups to respect per-dimension limits
-            uint32_t guess = static_cast<uint32_t>(std::ceil(std::sqrt((double)totalGroups)));
-            dispatchX = std::min(guess, maxX);
-            dispatchY = (totalGroups + dispatchX - 1) / dispatchX;
-            if (dispatchY > maxY) {
-                throw std::runtime_error("Compute dispatch counts exceed device limits");
-            }
-        }
-
-        vkCmdDispatch(commandBuffer, dispatchX, dispatchY, 1);
+        vkCmdDispatch(commandBuffer, 32, 32, 16);
 
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
         {
@@ -1113,7 +1078,9 @@ private:
     void createSyncObjects()
     {
         imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-        renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+        // Use one render-finished semaphore per swapchain image to avoid
+        // reusing a semaphore that is still in use by presentation.
+        renderFinishedSemaphores.resize(swapChainImages.size());
         computeFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
         inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
         computeInFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
@@ -1128,7 +1095,6 @@ private:
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
             if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
                 vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS)
             {
                 throw std::runtime_error("failed to create graphics synchronization objects for a frame!");
@@ -1137,6 +1103,15 @@ private:
                 vkCreateFence(device, &fenceInfo, nullptr, &computeInFlightFences[i]) != VK_SUCCESS)
             {
                 throw std::runtime_error("failed to create compute synchronization objects for a frame!");
+            }
+        }
+
+        // Create one render-finished semaphore per swapchain image.
+        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
+        {
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("failed to create renderFinished semaphore for a swapchain image!");
             }
         }
     }
@@ -1327,9 +1302,21 @@ private:
         {
             glfwPollEvents();
             drawFrame();
-            // We want to animate the particle system using the last frames time to get smooth, frame-rate independent animation
+
+            // FPS counting: update once per second and set window title
             double currentTime = glfwGetTime();
-            lastFrameTime = (currentTime - lastTime) * 1000.0;
+            frameCounter++;
+            if (currentTime - fpsLastTime >= 1.0)
+            {
+                fps = frameCounter;
+                frameCounter = 0;
+                fpsLastTime = currentTime;
+                std::string title = std::string("Vulkan - FPS: ") + std::to_string(fps);
+                glfwSetWindowTitle(window, title.c_str());
+            }
+
+            // We want to animate the particle system using the last frames time to get smooth, frame-rate independent animation
+            lastFrameTime = (currentTime - lastTime) * 1000.0f;
             lastTime = currentTime;
         }
 
@@ -1408,7 +1395,8 @@ private:
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
         submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &renderFinishedSemaphores[currentFrame];
+        // Signal the semaphore associated with the acquired swapchain image
+        submitInfo.pSignalSemaphores = &renderFinishedSemaphores[imageIndex];
 
         if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
         {
@@ -1419,7 +1407,8 @@ private:
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 
         presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &renderFinishedSemaphores[currentFrame];
+        // Wait on the semaphore that was signaled for this particular image
+        presentInfo.pWaitSemaphores = &renderFinishedSemaphores[imageIndex];
 
         VkSwapchainKHR swapChains[] = {swapChain};
         presentInfo.swapchainCount = 1;
@@ -1480,9 +1469,15 @@ private:
             vkFreeMemory(device, shaderStorageBuffersMemory[i], nullptr);
         }
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        // Destroy per-swapchain-image render-finished semaphores
+        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
         {
             vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+        }
+
+        // Destroy per-frame semaphores and fences
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
             vkDestroySemaphore(device, computeFinishedSemaphores[i], nullptr);
             vkDestroyFence(device, inFlightFences[i], nullptr);

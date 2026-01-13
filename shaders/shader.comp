@@ -1,7 +1,5 @@
 #version 450
 
-// #define PARTICLE_COUNT 262144u
-
 struct Particle {
 	vec2 position;
 	vec2 velocity;
@@ -24,13 +22,10 @@ layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 void main()
 {
-    // Flatten 2D dispatch into a linear index
+    // Flatten 3D dispatch into a linear index
     uint rowStride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
-    uint index = gl_GlobalInvocationID.y * rowStride + gl_GlobalInvocationID.x;
-
-    // if (index >= PARTICLE_COUNT) {
-    //     return;
-    // }
+    uint planeStride = gl_NumWorkGroups.x * gl_WorkGroupSize.x * gl_NumWorkGroups.y;
+    uint index = gl_GlobalInvocationID.z * planeStride + gl_GlobalInvocationID.y * rowStride + gl_GlobalInvocationID.x;
 
     Particle particleIn = particlesIn[index];
 
@@ -39,10 +34,9 @@ void main()
 
     // Flip movement at window border
     if ((particlesOut[index].position.x <= -1.0) || (particlesOut[index].position.x >= 1.0)) {
-        particlesOut[index].position.x = 0.0;
+        particlesOut[index].velocity.x *= -1.0;
     }
     if ((particlesOut[index].position.y <= -1.0) || (particlesOut[index].position.y >= 1.0)) {
-        particlesOut[index].position.y = 0.0;
+        particlesOut[index].velocity.y *= -1.0;
     }
-
 }
