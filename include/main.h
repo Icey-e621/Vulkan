@@ -24,16 +24,15 @@
 #include <vector>
 #include <optional>
 #include <set>
-#include <cstdint> // Necessary for uint32_t
-#include <limits> // Necessary for std::numeric_limits
+#include <cstdint>   // Necessary for uint32_t
+#include <limits>    // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
-#include <fstream> // to load shaders
+#include <fstream>   // to load shaders
 #include <algorithm> // i want to use them ok
-#include <random> // random stuff
+#include <random>    // random stuff
 
 const extern std::vector<const char *> validationLayers;
 const extern bool enableValidationLayers;
-
 
 // private QUEUE
 struct QueueFamilyIndices
@@ -44,11 +43,12 @@ struct QueueFamilyIndices
 
     bool isComplete()
     {
-        return graphicsFamily.has_value() && presentFamily.has_value() && ComputeFamily.has_value(); 
+        return graphicsFamily.has_value() && presentFamily.has_value() && ComputeFamily.has_value();
     }
 };
-//SWAP CHAIN STRUCT
-struct SwapChainSupportDetails {
+// SWAP CHAIN STRUCT
+struct SwapChainSupportDetails
+{
     VkSurfaceCapabilitiesKHR capabilities;
     std::vector<VkSurfaceFormatKHR> formats;
     std::vector<VkPresentModeKHR> presentModes;
