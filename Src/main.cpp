@@ -1068,7 +1068,7 @@ private:
 
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[currentFrame], 0, nullptr);
 
-        vkCmdDispatch(commandBuffer, 32, 32, 16);
+        vkCmdDispatch(commandBuffer, 32, 32, 32);
 
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
         {
