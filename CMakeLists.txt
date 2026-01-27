@@ -5,8 +5,6 @@ project(HelloTriangle)
 set(CMAKE_C_STANDARD 20)
 set(CMAKE_CXX_STANDARD 20)
 
-include(FetchContent)
-
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -35,14 +33,18 @@ foreach(SHADER IN LISTS SHADERS)
 list(APPEND SPV_SHADERS ${SHADER_DIR}/${NOPEXT}.spv)
 endForeach()
 
-add_custom_target(shaders ALL DEPENDS ${SPV_SHADERS})
+add_custom_target(Shaders ALL DEPENDS ${SPV_SHADERS})
 # HERE WE END COMPILING SHADERS
 
 file(GLOB SOURCE_FILES "Src/*.cpp")
 
+<<<<<<< HEAD
 add_executable(Main ${SOURCE_FILES} ${SHADERS})
 target_compile_definitions(Main PRIVATE VERT_SHADER='"${VERT_SHADER}"' FRAG_SHADER='"${FRAG_SHADER}"')
 
+=======
+add_executable(Main ${SOURCE_FILES})
+>>>>>>> origin
 
 target_include_directories(Main PRIVATE include/)
 
@@ -56,4 +58,8 @@ target_link_libraries(Main
         glfw
         glm::glm
 )
+<<<<<<< HEAD
 add_dependencies(Main shaders)
+=======
+add_dependencies(Main Shaders)
+>>>>>>> origin
