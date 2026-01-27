@@ -20,16 +20,17 @@ foreach(SHADER IN LISTS SHADERS)
     string(REPLACE "." "" NOPEXT "${EXT}")
     if(${NOPEXT} STREQUAL "frag")
         message(STATUS "FRAG_SHADER='${FULLPATH}'")
-        set(FRAG_SHADER ${FULLPATH})
+        set(FRAG_SHADER ${SHADER_DIR}/frag.spv)
     else()
         message(STATUS "VERT_SHADER='${FULLPATH}'")
-        set(VERT_SHADER ${FULLPATH})
+        set(VERT_SHADER ${SHADER_DIR}/vert.spv)
     endif()
     
     add_custom_command(OUTPUT ${SHADER_DIR}/${NOPEXT}.spv
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SHADER_DIR}/${NOPEXT}.spv
         DEPENDS ${SHADER}
         COMMENT "Compiling ${FILENAME}")
+
 list(APPEND SPV_SHADERS ${SHADER_DIR}/${NOPEXT}.spv)
 endForeach()
 
@@ -38,13 +39,8 @@ add_custom_target(Shaders ALL DEPENDS ${SPV_SHADERS})
 
 file(GLOB SOURCE_FILES "Src/*.cpp")
 
-<<<<<<< HEAD
 add_executable(Main ${SOURCE_FILES} ${SHADERS})
-target_compile_definitions(Main PRIVATE VERT_SHADER='"${VERT_SHADER}"' FRAG_SHADER='"${FRAG_SHADER}"')
-
-=======
-add_executable(Main ${SOURCE_FILES})
->>>>>>> origin
+target_compile_definitions(Main PRIVATE VERT_SHADER="${VERT_SHADER}" FRAG_SHADER="${FRAG_SHADER}")
 
 target_include_directories(Main PRIVATE include/)
 
@@ -58,8 +54,3 @@ target_link_libraries(Main
         glfw
         glm::glm
 )
-<<<<<<< HEAD
-add_dependencies(Main shaders)
-=======
-add_dependencies(Main Shaders)
->>>>>>> origin
