@@ -1,6 +1,7 @@
 #include "main.h"
 #include "ValidationLayers.h"
 #include "ExtraFuncs.h"
+#include "camera.h"
 #include <unordered_map>
 #define STB_IMAGE_IMPLEMENTATION
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -255,8 +256,8 @@ private:
         samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 
-        samplerInfo.anisotropyEnable = VK_FALSE;
-        samplerInfo.maxAnisotropy = 1.0f; // properties.limits.maxSamplerAnisotropy;
+        samplerInfo.anisotropyEnable = VK_TRUE; // change for no anisotropy
+        samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy; // 1.0f for no anisotropy
 
         samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 
@@ -923,7 +924,7 @@ private:
         rasterizer.depthClampEnable = VK_FALSE; // clamp far plane instead of not rendering it
         rasterizer.rasterizerDiscardEnable = VK_FALSE;
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL; // wireframe, fill, or points
-        rasterizer.lineWidth = 1.0f;                   // wireframe and points requires this, we enable udk why
+        rasterizer.lineWidth = 1.0f;                   // wireframe and points requires this, we enable just in case
         rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
         rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
@@ -1503,7 +1504,8 @@ private:
 
         UniformBufferObject ubo{};
         // transformation matrix
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(30.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        //camera applicable
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 
         // view vector
         ubo.view = glm::lookAt(glm::vec3(1.5f, 1.5f, 1.25f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
