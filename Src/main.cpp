@@ -107,6 +107,8 @@ public:
 
 private:
 #pragma region Members
+    // Camera
+    Camera camera;
     // multisampling count
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
     // multisampling extra image buffer
@@ -197,7 +199,8 @@ private:
 
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
         glfwSetWindowUserPointer(window, this);
-        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+
+        setupInputCallbacks(window);
     }
 
     void initVulkan()
@@ -256,7 +259,7 @@ private:
         samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 
-        samplerInfo.anisotropyEnable = VK_TRUE; // change for no anisotropy
+        samplerInfo.anisotropyEnable = VK_TRUE;                             // change for no anisotropy
         samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy; // 1.0f for no anisotropy
 
         samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
@@ -267,7 +270,7 @@ private:
         samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
 
         samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerInfo.minLod = 0.0f;
+        samplerInfo.minLod = static_cast<float>(mipLevels / 4);
         samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
         samplerInfo.mipLodBias = 0.0f;
 
@@ -937,7 +940,7 @@ private:
         multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisampling.sampleShadingEnable = VK_TRUE; // enable sample shading in the pipeline
         multisampling.rasterizationSamples = msaaSamples;
-        multisampling.minSampleShading = .2f;          // Optional
+        multisampling.minSampleShading = .2f;           // Optional
         multisampling.pSampleMask = nullptr;            // Optional
         multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
         multisampling.alphaToOneEnable = VK_FALSE;      // Optional
@@ -1223,12 +1226,12 @@ private:
             swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-        return //isNotIGPU &&
-               deviceFeatures.geometryShader &&
-               indices.isComplete() &&
-               extensionsSupported &&
-               swapChainAdequate &&
-               deviceFeatures.samplerAnisotropy;
+        return // isNotIGPU &&
+            deviceFeatures.geometryShader &&
+            indices.isComplete() &&
+            extensionsSupported &&
+            swapChainAdequate &&
+            deviceFeatures.samplerAnisotropy;
     }
     bool checkDeviceExtensionSupport(VkPhysicalDevice device)
     {
@@ -1504,8 +1507,8 @@ private:
 
         UniformBufferObject ubo{};
         // transformation matrix
-        //camera applicable
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        // camera applicable
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(30.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
         // view vector
         ubo.view = glm::lookAt(glm::vec3(1.5f, 1.5f, 1.25f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
@@ -1666,7 +1669,109 @@ private:
             throw std::runtime_error("failed to set up debug messenger!");
         }
     }
+#pragma region CameraFuncs
 
+    // Keyboard input processing for camera translation
+    // Handles discrete directional commands with frame-rate independent timing
+    void processInput(GLFWwindow *window, Camera &camera, float deltaTime)
+    {
+        // WASD movement scheme following standard FPS conventions
+        // Each key press translates to a specific directional movement relative to camera orientation
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            camera.processKeyboard(CameraMovement::FORWARD, deltaTime); // Move forward along camera's front vector
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            camera.processKeyboard(CameraMovement::BACKWARD, deltaTime); // Move backward opposite to front vector
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            camera.processKeyboard(CameraMovement::LEFT, deltaTime); // Strafe left along camera's right vector
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            camera.processKeyboard(CameraMovement::RIGHT, deltaTime); // Strafe right along camera's right vector
+
+        // Vertical movement controls for 3D navigation
+        // Space and Control provide intuitive up/down movement
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+            camera.processKeyboard(CameraMovement::UP, deltaTime); // Move up along camera's up vector
+        if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS)
+            camera.processKeyboard(CameraMovement::DOWN, deltaTime); // Move down opposite to up vector
+    }
+    // The static wrapper (The Trampoline)
+    static void mouseCallback(GLFWwindow *window, double xpos, double ypos)
+    {
+        // 3. Retrieve the pointer to our specific instance
+        auto app = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+
+        // 4. Forward the call to the actual member function
+        if (app)
+        {
+            app->handleMouseCallback(window, xpos, ypos);
+        }
+    }
+    // Mouse movement callback for continuous camera rotation
+    // Manages state persistence and coordinate transformations for smooth rotation control
+    void handleMouseCallback(GLFWwindow *window, double xpos, double ypos)
+    {
+        // State persistence for calculating movement deltas
+        // Static variables maintain state between callback invocations
+        static bool firstMouse = true;           // Flag to handle initial mouse position
+        static float lastX = 0.0f, lastY = 0.0f; // Previous mouse position for delta calculation
+
+        // Handle initial mouse position to prevent sudden camera jumps
+        // First callback provides absolute position, not relative movement
+        if (firstMouse)
+        {
+            lastX = xpos; // Initialize previous position
+            lastY = ypos;
+            firstMouse = false; // Disable special handling for subsequent calls
+        }
+
+        // Calculate mouse movement deltas since last callback
+        // These deltas represent the amount and direction of mouse movement
+        float xoffset = xpos - lastX; // Horizontal movement (left-right)
+        float yoffset = lastY - ypos; // Vertical movement (inverted: screen Y increases downward, camera pitch increases upward)
+
+        // Update state for next callback iteration
+        lastX = xpos;
+        lastY = ypos;
+
+        // Convert mouse movement to camera rotation
+        // Delta values drive continuous camera orientation changes
+        camera.processMouseMovement(xoffset, yoffset);
+    }
+    // The static wrapper (The Trampoline)
+    static void scrollCallback(GLFWwindow *window, double xoffset, double yoffset)
+    {
+        // 3. Retrieve the pointer to our specific instance
+        auto app = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+
+        // 4. Forward the call to the actual member function
+        if (app)
+        {
+            app->handleScrollCallback(window, xoffset, yoffset);
+        }
+    }
+    // Scroll wheel callback for zoom control
+    // Provides intuitive field-of-view adjustment through scroll wheel interaction
+    void handleScrollCallback(GLFWwindow *window, double xoffset, double yoffset)
+    {
+        // Direct scroll-to-zoom mapping
+        // Positive yoffset (scroll up) typically zooms in, negative (scroll down) zooms out
+        camera.processMouseScroll(yoffset);
+    }
+    // Input system initialization and callback registration
+    // Establishes the connection between windowing system and camera control callbacks
+    void setupInputCallbacks(GLFWwindow *window)
+    {
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+
+        // Register callback functions with the windowing system
+        // These establish the event-driven connection between hardware input and camera control
+        glfwSetCursorPosCallback(window, mouseCallback); // Connect mouse movement to camera rotation
+        glfwSetScrollCallback(window, scrollCallback);   // Connect scroll wheel to camera zoom
+
+        // Configure mouse capture mode for first-person camera behavior
+        // Disabling the cursor provides continuous mouse input without cursor interference
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
+#pragma endregion
 #pragma region LibFuncs
     // how many samples can we shoot ?
     VkSampleCountFlagBits getMaxUsableSampleCount()
@@ -2091,7 +2196,7 @@ private:
 
         if (!file.is_open())
         {
-            throw std::runtime_error("failed to open file: "+filename);
+            throw std::runtime_error("failed to open file: " + filename);
         }
 
         size_t fileSize = (size_t)file.tellg();
