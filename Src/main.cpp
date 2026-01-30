@@ -4,13 +4,12 @@
 #include <unordered_map>
 #include <cmath>
 #define STB_IMAGE_IMPLEMENTATION
-#define TINYOBJLOADER_IMPLEMENTATION
 #include <stb_image.h>
-#include <tiny_obj_loader.h>
 
 constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
-constexpr uint32_t PARTICLE_COUNT = 4096*1024;
+const uint32_t HEIGHT = 600;
+constexpr uint32_t IMAGE_WIDTH = 800;
+const uint32_t IMAGE_HEIGHT = 600;
 
 // max queued frames
 const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -122,6 +121,11 @@ struct UniformBufferObject
 {
     float deltaTime = 1.0f;
 };
+
+struct ImageDimensions
+{
+    glm::uvec2 imageDims;
+};
 #pragma endregion
 
 class HelloTriangleApplication
@@ -161,6 +165,7 @@ private:
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
 
+    VkDescriptorSetLayout graphicsDescriptorSetLayout;
     VkDescriptorSetLayout computeDescriptorSetLayout;
     VkPipelineLayout computePipelineLayout;
     VkPipeline computePipeline;
@@ -168,6 +173,17 @@ private:
     VkCommandPool commandPool;
     VkCommandPool computeCommandPool;
 
+    // Image storage for blur
+    VkImage inputImage;
+    VkDeviceMemory inputImageMemory;
+    VkImageView inputImageView;
+    
+    std::vector<VkImage> outputImages;
+    std::vector<VkDeviceMemory> outputImageMemories;
+    std::vector<VkImageView> outputImageViews;
+    
+    VkSampler imageSampler;
+    
     std::vector<VkBuffer> shaderStorageBuffers;
     std::vector<VkDeviceMemory> shaderStorageBuffersMemory;
 
@@ -175,7 +191,12 @@ private:
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void *> uniformBuffersMapped;
 
+    std::vector<VkBuffer> imageDimensionBuffers;
+    std::vector<VkDeviceMemory> imageDimensionBuffersMemory;
+    std::vector<void *> imageDimensionBuffersMapped;
+
     VkDescriptorPool descriptorPool;
+    std::vector<VkDescriptorSet> graphicsDescriptorSets;
     std::vector<VkDescriptorSet> computeDescriptorSets;
 
     std::vector<VkCommandBuffer> commandBuffers;
@@ -224,17 +245,22 @@ private:
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
+        createCommandPool();
         createSwapChain();
         createImageViews();
         createRenderPass();
+        createGraphicsDescriptorSetLayout();
         createComputeDescriptorSetLayout();
+        loadImageFromFile();
+        createOutputImages();
+        createSampler();
         createGraphicsPipeline();
         createComputePipeline();
         createFramebuffers();
-        createCommandPool();
-        createShaderStorageBuffers();
         createUniformBuffers();
+        createImageDimensionBuffers();
         createDescriptorPool();
+        createGraphicsDescriptorSets();
         createComputeDescriptorSets();
         createCommandBuffers();
         createComputeCommandBuffers();
@@ -257,93 +283,161 @@ private:
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
-            VkDescriptorBufferInfo uniformBufferInfo{};
-            uniformBufferInfo.buffer = uniformBuffers[i];
-            uniformBufferInfo.offset = 0;
-            uniformBufferInfo.range = sizeof(UniformBufferObject);
+            VkDescriptorImageInfo inputImageInfo{};
+            inputImageInfo.sampler = imageSampler;
+            inputImageInfo.imageView = inputImageView;
+            inputImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            VkDescriptorImageInfo outputImageInfo{};
+            outputImageInfo.imageView = outputImageViews[i];
+            outputImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            VkDescriptorBufferInfo imageDimBufferInfo{};
+            imageDimBufferInfo.buffer = imageDimensionBuffers[i];
+            imageDimBufferInfo.offset = 0;
+            imageDimBufferInfo.range = sizeof(ImageDimensions);
 
             std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
             descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrites[0].dstSet = computeDescriptorSets[i];
             descriptorWrites[0].dstBinding = 0;
             descriptorWrites[0].dstArrayElement = 0;
-            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             descriptorWrites[0].descriptorCount = 1;
-            descriptorWrites[0].pBufferInfo = &uniformBufferInfo;
-
-            VkDescriptorBufferInfo storageBufferInfoLastFrame{};
-            storageBufferInfoLastFrame.buffer = shaderStorageBuffers[(i - 1) % MAX_FRAMES_IN_FLIGHT];
-            storageBufferInfoLastFrame.offset = 0;
-            storageBufferInfoLastFrame.range = sizeof(Particle) * PARTICLE_COUNT;
+            descriptorWrites[0].pImageInfo = &inputImageInfo;
 
             descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrites[1].dstSet = computeDescriptorSets[i];
             descriptorWrites[1].dstBinding = 1;
             descriptorWrites[1].dstArrayElement = 0;
-            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             descriptorWrites[1].descriptorCount = 1;
-            descriptorWrites[1].pBufferInfo = &storageBufferInfoLastFrame;
-
-            VkDescriptorBufferInfo storageBufferInfoCurrentFrame{};
-            storageBufferInfoCurrentFrame.buffer = shaderStorageBuffers[i];
-            storageBufferInfoCurrentFrame.offset = 0;
-            storageBufferInfoCurrentFrame.range = sizeof(Particle) * PARTICLE_COUNT;
+            descriptorWrites[1].pImageInfo = &outputImageInfo;
 
             descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrites[2].dstSet = computeDescriptorSets[i];
             descriptorWrites[2].dstBinding = 2;
             descriptorWrites[2].dstArrayElement = 0;
-            descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            descriptorWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             descriptorWrites[2].descriptorCount = 1;
-            descriptorWrites[2].pBufferInfo = &storageBufferInfoCurrentFrame;
+            descriptorWrites[2].pBufferInfo = &imageDimBufferInfo;
 
             vkUpdateDescriptorSets(device, 3, descriptorWrites.data(), 0, nullptr);
         }
     }
-    void createShaderStorageBuffers()
+
+    void createGraphicsDescriptorSets()
     {
+        std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, graphicsDescriptorSetLayout);
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = descriptorPool;
+        allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        allocInfo.pSetLayouts = layouts.data();
 
-        // Initialize particles
-        std::default_random_engine rndEngine((unsigned)time(nullptr));
-        std::uniform_real_distribution<float> rndDist(0.0f, 1.0f);
-
-        // Initial particle positions on a circle
-        std::vector<Particle> particles(PARTICLE_COUNT);
-        for (auto &particle : particles)
+        graphicsDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+        if (vkAllocateDescriptorSets(device, &allocInfo, graphicsDescriptorSets.data()) != VK_SUCCESS)
         {
-            float r = 0.25f * sqrt(rndDist(rndEngine));
-            float theta = rndDist(rndEngine) * 2.0f * 3.14159265358979323846f;
-            float x = r * cos(theta) * HEIGHT / WIDTH;
-            float y = r * sin(theta);
-            particle.position = glm::vec2(x, y);
-            particle.velocity = glm::normalize(glm::vec2(x, y)) * 0.00025f;
-            particle.color = glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);
+            throw std::runtime_error("failed to allocate graphics descriptor sets!");
         }
 
-        VkDeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
-
-        // Create a staging buffer used to upload data to the gpu
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        void *data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, particles.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        shaderStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-        shaderStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-
-        // Copy initial particle data to all storage buffers
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
-            createBuffer(bufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shaderStorageBuffers[i], shaderStorageBuffersMemory[i]);
-            copyBuffer(stagingBuffer, shaderStorageBuffers[i], bufferSize);
-        }
+            VkDescriptorImageInfo outputImageInfo{};
+            outputImageInfo.sampler = imageSampler;
+            outputImageInfo.imageView = outputImageViews[i];
+            outputImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+            VkWriteDescriptorSet descriptorWrite{};
+            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrite.dstSet = graphicsDescriptorSets[i];
+            descriptorWrite.dstBinding = 1;
+            descriptorWrite.dstArrayElement = 0;
+            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrite.descriptorCount = 1;
+            descriptorWrite.pImageInfo = &outputImageInfo;
+
+            vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        }
+    }
+
+    void loadImageFromFile()
+    {
+        // Load image using stb_image
+        int texWidth, texHeight, texChannels;
+        stbi_uc *pixels = stbi_load("../textures/marble.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        
+        if (!pixels) {
+            throw std::runtime_error("failed to load image!");
+        }
+        
+        VkDeviceSize imageSize = texWidth * texHeight * 4;
+        
+        // Create staging buffer
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+        
+        void *data;
+        vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+        memcpy(data, pixels, static_cast<size_t>(imageSize));
+        vkUnmapMemory(device, stagingBufferMemory);
+        
+        stbi_image_free(pixels);
+        
+        // Create the input image
+        createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, inputImage, inputImageMemory);
+        
+        // Transition to transfer destination
+        transitionImageLayout(inputImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+        copyBufferToImage(stagingBuffer, inputImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+        transitionImageLayout(inputImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, 1);
+        
+        // Create image view
+        inputImageView = createImageView(inputImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+        
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+    
+    void createOutputImages()
+    {
+        outputImages.resize(MAX_FRAMES_IN_FLIGHT);
+        outputImageMemories.resize(MAX_FRAMES_IN_FLIGHT);
+        outputImageViews.resize(MAX_FRAMES_IN_FLIGHT);
+        
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            createImage(IMAGE_WIDTH, IMAGE_HEIGHT, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outputImages[i], outputImageMemories[i]);
+            transitionImageLayout(outputImages[i], VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
+            outputImageViews[i] = createImageView(outputImages[i], VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+        }
+    }
+
+    void createSampler()
+    {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.mipLodBias = 0.0f;
+        samplerInfo.minLod = 0.0f;
+        samplerInfo.maxLod = 0.0f;
+
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &imageSampler) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create sampler!");
+        }
     }
 
     void createInstance()
@@ -601,6 +695,30 @@ private:
         }
     }
     /**
+     * @brief Function for supporting custom bindings for the graphics shaders
+     *
+     */
+    void createGraphicsDescriptorSetLayout()
+    {
+        std::array<VkDescriptorSetLayoutBinding, 1> layoutBindings{};
+        layoutBindings[0].binding = 1;
+        layoutBindings[0].descriptorCount = 1;
+        layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        layoutBindings[0].pImmutableSamplers = nullptr;
+        layoutBindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = layoutBindings.data();
+
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &graphicsDescriptorSetLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("failed to create graphics descriptor set layout!");
+        }
+    }
+
+    /**
      * @brief Function for supporting custom bindings for the shaders
      *
      */
@@ -609,19 +727,19 @@ private:
         std::array<VkDescriptorSetLayoutBinding, 3> layoutBindings{};
         layoutBindings[0].binding = 0;
         layoutBindings[0].descriptorCount = 1;
-        layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        layoutBindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         layoutBindings[0].pImmutableSamplers = nullptr;
         layoutBindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
         layoutBindings[1].binding = 1;
         layoutBindings[1].descriptorCount = 1;
-        layoutBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        layoutBindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         layoutBindings[1].pImmutableSamplers = nullptr;
         layoutBindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
         layoutBindings[2].binding = 2;
         layoutBindings[2].descriptorCount = 1;
-        layoutBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        layoutBindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         layoutBindings[2].pImmutableSamplers = nullptr;
         layoutBindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
@@ -663,18 +781,12 @@ private:
 
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-        auto bindingDescription = Particle::getBindingDescription();
-        auto attributeDescriptions = Particle::getAttributeDescriptions();
-
-        vertexInputInfo.vertexBindingDescriptionCount = 1;
-        vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-        vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-        vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+        vertexInputInfo.vertexBindingDescriptionCount = 0;
+        vertexInputInfo.vertexAttributeDescriptionCount = 0;
 
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
         inputAssembly.primitiveRestartEnable = VK_FALSE;
 
         VkPipelineViewportStateCreateInfo viewportState{};
@@ -728,8 +840,8 @@ private:
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount = 0;
-        pipelineLayoutInfo.pSetLayouts = nullptr;
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &graphicsDescriptorSetLayout;
 
         if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS)
         {
@@ -868,6 +980,28 @@ private:
             vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
         }
     }
+
+    void createImageDimensionBuffers()
+    {
+        VkDeviceSize bufferSize = sizeof(ImageDimensions);
+
+        imageDimensionBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+        imageDimensionBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+        imageDimensionBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, imageDimensionBuffers[i], imageDimensionBuffersMemory[i]);
+
+            vkMapMemory(device, imageDimensionBuffersMemory[i], 0, bufferSize, 0, &imageDimensionBuffersMapped[i]);
+            
+            // Write image dimensions
+            ImageDimensions dims{};
+            dims.imageDims = glm::uvec2(IMAGE_WIDTH, IMAGE_HEIGHT);
+            memcpy(imageDimensionBuffersMapped[i], &dims, sizeof(dims));
+        }
+    }
+
     /**
      * @brief memory type to know wether we can use VRAM
      *
@@ -945,18 +1079,24 @@ private:
     // end buffer creator funcs
     void createDescriptorPool()
     {
-        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+        std::array<VkDescriptorPoolSize, 4> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2;  // uniform buffers + image dimensions
 
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2;
 
+        poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+        poolSizes[3].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        poolSizes[3].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 2;
+        poolInfo.poolSizeCount = 4;
         poolInfo.pPoolSizes = poolSizes.data();
-        poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 2;  // compute + graphics descriptor sets
 
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
         {
@@ -1026,6 +1166,8 @@ private:
         vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &graphicsDescriptorSets[currentFrame], 0, nullptr);
 
         VkViewport viewport{};
         viewport.x = 0.0f;
@@ -1041,10 +1183,8 @@ private:
         scissor.extent = swapChainExtent;
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &shaderStorageBuffers[currentFrame], offsets);
-
-        vkCmdDraw(commandBuffer, PARTICLE_COUNT, 1, 0, 0);
+        // Draw fullscreen quad (4 vertices for triangle strip)
+        vkCmdDraw(commandBuffer, 4, 1, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
@@ -1068,7 +1208,18 @@ private:
 
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[currentFrame], 0, nullptr);
 
-        vkCmdDispatch(commandBuffer, 32, 32, 32);
+        // Dispatch compute shader to blur the image
+        uint32_t workgroupX = (IMAGE_WIDTH + 15) / 16;
+        uint32_t workgroupY = (IMAGE_HEIGHT + 15) / 16;
+        vkCmdDispatch(commandBuffer, workgroupX, workgroupY, 1);
+        
+        // Memory barrier to ensure compute shader writes are completed before graphics reads
+        VkMemoryBarrier memoryBarrier{};
+        memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
 
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
         {
@@ -1453,14 +1604,35 @@ private:
 
         vkDestroyRenderPass(device, renderPass, nullptr);
 
+        // Cleanup image resources
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            vkDestroyImageView(device, outputImageViews[i], nullptr);
+            vkDestroyImage(device, outputImages[i], nullptr);
+            vkFreeMemory(device, outputImageMemories[i], nullptr);
+        }
+        
+        vkDestroySampler(device, imageSampler, nullptr);
+        
+        vkDestroyImageView(device, inputImageView, nullptr);
+        vkDestroyImage(device, inputImage, nullptr);
+        vkFreeMemory(device, inputImageMemory, nullptr);
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
             vkDestroyBuffer(device, uniformBuffers[i], nullptr);
             vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
         }
 
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            vkDestroyBuffer(device, imageDimensionBuffers[i], nullptr);
+            vkFreeMemory(device, imageDimensionBuffersMemory[i], nullptr);
+        }
+
         vkDestroyDescriptorPool(device, descriptorPool, nullptr);
 
+        vkDestroyDescriptorSetLayout(device, graphicsDescriptorSetLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
@@ -1883,6 +2055,28 @@ private:
 
             sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
             destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        }
+        else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_GENERAL)
+        {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        }
+        else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_GENERAL)
+        {
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+
+            sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            destinationStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        }
+        else if (oldLayout == newLayout)
+        {
+            // No transition needed
+            endSingleTimeCommands(commandBuffer);
+            return;
         }
         else
         {

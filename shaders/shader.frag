@@ -1,10 +1,13 @@
 #version 450
 
-layout(location = 0) in vec3 fragColor;
+layout(location = 0) in vec2 texCoord;
 
 layout(location = 0) out vec4 outColor;
 
+// Define the blurred output image as a combined image sampler
+layout(binding = 1) uniform sampler2D blurredImage;
+
 void main() {
-    vec2 coord = gl_PointCoord - vec2(0.5);
-    outColor = vec4(fragColor, 0.5 - length(coord));
+    // Sample from the blurred output image using texture coordinates
+    outColor = texture(blurredImage, texCoord);
 }

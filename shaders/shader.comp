@@ -1,42 +1,43 @@
 #version 450
 
-struct Particle {
-	vec2 position;
-	vec2 velocity;
-    vec4 color;
+layout(binding = 0) uniform sampler2D inputImage;
+layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
+
+layout(binding = 2, std140) uniform ImageDimensions {
+    uvec2 imageDims;
 };
 
-layout (binding = 0) uniform ParameterUBO {
-    float deltaTime;
-} ubo;
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(std140, binding = 1) readonly buffer ParticleSSBOIn {
-   Particle particlesIn[ ];
-};
-
-layout(std140, binding = 2) buffer ParticleSSBOOut {
-   Particle particlesOut[ ];
-};
-
-layout (local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-
-void main()
-{
-    // Flatten 3D dispatch into a linear index
-    uint rowStride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
-    uint planeStride = gl_NumWorkGroups.x * gl_WorkGroupSize.x * gl_NumWorkGroups.y;
-    uint index = gl_GlobalInvocationID.z * planeStride + gl_GlobalInvocationID.y * rowStride + gl_GlobalInvocationID.x;
-
-    Particle particleIn = particlesIn[index];
-
-    particlesOut[index].position = particleIn.position + particleIn.velocity.xy * ubo.deltaTime;
-    particlesOut[index].velocity = particleIn.velocity;
-
-    // Flip movement at window border
-    if ((particlesOut[index].position.x <= -1.0) || (particlesOut[index].position.x >= 1.0)) {
-        particlesOut[index].velocity.x *= -1.0;
+void main() {
+    ivec2 coords = ivec2(gl_GlobalInvocationID.xy);
+    
+    // Check bounds
+    if (coords.x >= imageDims.x || coords.y >= imageDims.y) {
+        return;
     }
-    if ((particlesOut[index].position.y <= -1.0) || (particlesOut[index].position.y >= 1.0)) {
-        particlesOut[index].velocity.y *= -1.0;
+    
+    // Simple box blur with radius 2
+    const int radius = 2;
+    vec4 result = vec4(0.0);
+    float weight = 0.0;
+    
+    for (int y = -radius; y <= radius; ++y) {
+        for (int x = -radius; x <= radius; ++x) {
+            ivec2 sampleCoords = coords + ivec2(x, y);
+            
+            // Clamp to image bounds
+            sampleCoords = clamp(sampleCoords, ivec2(0), ivec2(imageDims) - 1);
+            
+            // Convert to normalized coordinates for texture sampling
+            vec2 normalizedCoords = vec2(sampleCoords) / vec2(imageDims);
+            result += texture(inputImage, normalizedCoords);
+            weight += 1.0;
+        }
     }
+    
+    // Average the samples
+    result /= weight;
+    
+    imageStore(outputImage, coords, result);
 }
