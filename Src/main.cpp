@@ -346,7 +346,7 @@ private:
             VkDescriptorImageInfo outputImageInfo{};
             outputImageInfo.sampler = imageSampler;
             outputImageInfo.imageView = outputImageViews[i];
-            outputImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            outputImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
             VkWriteDescriptorSet descriptorWrite{};
             descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -386,7 +386,7 @@ private:
         stbi_image_free(pixels);
         
         // Create the input image
-        createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, inputImage, inputImageMemory);
+        createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, inputImage, inputImageMemory);
         
         // Transition to transfer destination
         transitionImageLayout(inputImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
@@ -1050,31 +1050,11 @@ private:
 
         vkDeviceWaitIdle(device);
 
-        // Destroy old swapchain and its image-related semaphores, they'll be recreated
-        // to match the new swapchain image count.
-        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
-        {
-            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-        }
-        renderFinishedSemaphores.clear();
-
         cleanupSwapChain();
 
         createSwapChain();
         createImageViews();
         createFramebuffers();
-
-        // Recreate per-image render-finished semaphores for the new swapchain
-        VkSemaphoreCreateInfo semaphoreInfo{};
-        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        renderFinishedSemaphores.resize(swapChainImages.size());
-        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
-        {
-            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS)
-            {
-                throw std::runtime_error("failed to create renderFinished semaphore during swapchain recreation!");
-            }
-        }
     }
     // end buffer creator funcs
     void createDescriptorPool()
@@ -1219,7 +1199,7 @@ private:
         memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
 
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
         {
@@ -1229,9 +1209,8 @@ private:
     void createSyncObjects()
     {
         imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-        // Use one render-finished semaphore per swapchain image to avoid
-        // reusing a semaphore that is still in use by presentation.
-        renderFinishedSemaphores.resize(swapChainImages.size());
+        // Use one render-finished semaphore per frame (not per swapchain image)
+        renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
         computeFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
         inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
         computeInFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
@@ -1250,19 +1229,11 @@ private:
             {
                 throw std::runtime_error("failed to create graphics synchronization objects for a frame!");
             }
-            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &computeFinishedSemaphores[i]) != VK_SUCCESS ||
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &computeFinishedSemaphores[i]) != VK_SUCCESS ||
                 vkCreateFence(device, &fenceInfo, nullptr, &computeInFlightFences[i]) != VK_SUCCESS)
             {
                 throw std::runtime_error("failed to create compute synchronization objects for a frame!");
-            }
-        }
-
-        // Create one render-finished semaphore per swapchain image.
-        for (size_t i = 0; i < renderFinishedSemaphores.size(); ++i)
-        {
-            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS)
-            {
-                throw std::runtime_error("failed to create renderFinished semaphore for a swapchain image!");
             }
         }
     }
@@ -1546,8 +1517,8 @@ private:
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
         submitInfo.signalSemaphoreCount = 1;
-        // Signal the semaphore associated with the acquired swapchain image
-        submitInfo.pSignalSemaphores = &renderFinishedSemaphores[imageIndex];
+        // Signal the semaphore for this frame
+        submitInfo.pSignalSemaphores = &renderFinishedSemaphores[currentFrame];
 
         if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
         {
@@ -1558,8 +1529,8 @@ private:
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 
         presentInfo.waitSemaphoreCount = 1;
-        // Wait on the semaphore that was signaled for this particular image
-        presentInfo.pWaitSemaphores = &renderFinishedSemaphores[imageIndex];
+        // Wait on the semaphore that was signaled for this frame
+        presentInfo.pWaitSemaphores = &renderFinishedSemaphores[currentFrame];
 
         VkSwapchainKHR swapChains[] = {swapChain};
         presentInfo.swapchainCount = 1;
@@ -1618,16 +1589,28 @@ private:
         vkDestroyImage(device, inputImage, nullptr);
         vkFreeMemory(device, inputImageMemory, nullptr);
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT && i < uniformBuffers.size(); i++)
         {
-            vkDestroyBuffer(device, uniformBuffers[i], nullptr);
-            vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+            if (uniformBuffers[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+            }
+            if (uniformBuffersMemory[i] != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+            }
         }
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT && i < imageDimensionBuffers.size(); i++)
         {
-            vkDestroyBuffer(device, imageDimensionBuffers[i], nullptr);
-            vkFreeMemory(device, imageDimensionBuffersMemory[i], nullptr);
+            if (imageDimensionBuffers[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(device, imageDimensionBuffers[i], nullptr);
+            }
+            if (imageDimensionBuffersMemory[i] != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(device, imageDimensionBuffersMemory[i], nullptr);
+            }
         }
 
         vkDestroyDescriptorPool(device, descriptorPool, nullptr);
@@ -1635,10 +1618,16 @@ private:
         vkDestroyDescriptorSetLayout(device, graphicsDescriptorSetLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT && i < shaderStorageBuffers.size(); i++)
         {
-            vkDestroyBuffer(device, shaderStorageBuffers[i], nullptr);
-            vkFreeMemory(device, shaderStorageBuffersMemory[i], nullptr);
+            if (shaderStorageBuffers[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(device, shaderStorageBuffers[i], nullptr);
+            }
+            if (shaderStorageBuffersMemory[i] != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(device, shaderStorageBuffersMemory[i], nullptr);
+            }
         }
 
         // Destroy per-swapchain-image render-finished semaphores

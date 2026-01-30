@@ -8,6 +8,6 @@ layout(location = 0) out vec4 outColor;
 layout(binding = 1) uniform sampler2D blurredImage;
 
 void main() {
-    // Sample from the blurred output image using texture coordinates
-    outColor = texture(blurredImage, texCoord);
+    // Output magenta to test graphics pipeline
+    outColor = vec4(1.0, 0.0, 1.0, 1.0);
 }
