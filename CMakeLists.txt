@@ -45,13 +45,34 @@ target_link_libraries(Main
 )
 add_dependencies(Main Shaders)
 
-# Copy shaders and textures to the build directory
+# Copy specific resources to the build directory
 add_custom_command(TARGET Main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/shaders
-        $<TARGET_FILE_DIR:Main>/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/textures
-        $<TARGET_FILE_DIR:Main>/textures
-    COMMENT "Copying shaders and textures to binary directory"
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:Main>/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:Main>/textures
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.spv
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.spv
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/comp.spv
+        $<TARGET_FILE_DIR:Main>/shaders/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/textures/frutas.jpg
+        ${CMAKE_CURRENT_SOURCE_DIR}/textures/aves.jpg
+        $<TARGET_FILE_DIR:Main>/textures/
+    COMMENT "Copying specific resources to binary directory"
+)
+
+# Custom target to package the application for distribution
+add_custom_target(Package
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:Main> ${CMAKE_BINARY_DIR}/dist/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:Main>/glfw3.dll ${CMAKE_BINARY_DIR}/dist/
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/textures
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.spv ${CMAKE_BINARY_DIR}/dist/shaders/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.spv ${CMAKE_BINARY_DIR}/dist/shaders/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/shaders/comp.spv ${CMAKE_BINARY_DIR}/dist/shaders/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/frutas.jpg ${CMAKE_BINARY_DIR}/dist/textures/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/aves.jpg ${CMAKE_BINARY_DIR}/dist/textures/
+    COMMENT "Packaging application to ${CMAKE_BINARY_DIR}/dist"
+    DEPENDS Main
 )
