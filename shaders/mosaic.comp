@@ -3,15 +3,17 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, rgba8) uniform readonly image2D inputImage1;
-layout(binding = 1, rgba8) uniform readonly image2D inputImage2;
-layout(binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(binding = 1, rgba8) uniform readonly image2D meanImage1;
+layout(binding = 2, rgba8) uniform readonly image2D meanImage2;
+layout(binding = 3, rgba8) uniform writeonly image2D outputImage;
 
 float colorDistance(vec3 c1, vec3 c2) {
     return length(c1 - c2);
 }
 
-// Shared variable must be at global scope
-shared ivec2 bestSourceBlock;
+// Shared memory for reduction
+shared float s_minDist[256];
+shared uint s_bestIdx[256];
 
 void main() {
     ivec2 imgSize = imageSize(inputImage1);
@@ -20,32 +22,64 @@ void main() {
     
     // Calculate grid dimensions
     ivec2 gridSize = (imgSize + ivec2(15, 15)) / 16;
+    uint totalBlocks = gridSize.x * gridSize.y;
+    uint threadIndex = gl_LocalInvocationIndex; // 0 to 255
     
     if (myBlockPos.x >= gridSize.x || myBlockPos.y >= gridSize.y) return;
     
-    if (gl_LocalInvocationIndex == 0) {
-        // Get the target color for this block (center pixel)
-        vec3 targetColor = imageLoad(inputImage2, myBlockPos * 16 + ivec2(8, 8)).rgb;
+    // Get the target mean color for this block
+    // We already computed the mean in meanImage2, so just read it (1 pixel corresponds to 1 block)
+    vec3 targetMean = imageLoad(meanImage2, myBlockPos).rgb;
+    
+    // 1. Parallel Search: Each thread checks a subset of source blocks using mean colors
+    float myBestDist = 1e10;
+    uint myBestIdx = 0; // Packed index (y * width + x)
+    
+    for (uint i = threadIndex; i < totalBlocks; i += 256) {
+        // Convert scalar index 'i' back to 2D block position
+        uint by = i / gridSize.x;
+        uint bx = i - (by * gridSize.x);
         
-        float bestDistance = 1e10;
-        bestSourceBlock = ivec2(0, 0);
+        ivec2 sourceBlockPos = ivec2(bx, by);
+        // Read precomputed mean from meanImage1
+        vec3 sourceMean = imageLoad(meanImage1, sourceBlockPos).rgb;
         
-        // Search all source blocks to find the best match
-        for (int y = 0; y < gridSize.y; y++) {
-            for (int x = 0; x < gridSize.x; x++) {
-                ivec2 sourceBlockPos = ivec2(x, y);
-                vec3 sourceColor = imageLoad(inputImage1, sourceBlockPos * 16 + ivec2(8, 8)).rgb;
-                
-                float dist = colorDistance(targetColor, sourceColor);
-                if (dist < bestDistance) {
-                    bestDistance = dist;
-                    bestSourceBlock = sourceBlockPos;
-                }
-            }
+        float dist = colorDistance(targetMean, sourceMean);
+        if (dist < myBestDist) {
+            myBestDist = dist;
+            myBestIdx = i;
         }
     }
     
-    barrier(); // Wait for best match to be found
+    // Store local results in shared memory
+    s_minDist[threadIndex] = myBestDist;
+    s_bestIdx[threadIndex] = myBestIdx;
+    
+    barrier(); // Wait for all threads to finish their search
+    
+    // 2. Parallel Reduction: Find absolute minimum in shared memory
+    // Loop unrolled for 256 threads -> 128 -> 64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (threadIndex < s) {
+            if (s_minDist[threadIndex + s] < s_minDist[threadIndex]) {
+                s_minDist[threadIndex] = s_minDist[threadIndex + s];
+                s_bestIdx[threadIndex] = s_bestIdx[threadIndex + s];
+            }
+        }
+        barrier();
+    }
+    
+    // Thread 0 has the global minimum index
+    // Broadcast the best index to all threads using shared memory
+    
+    // We already have s_bestIdx[0] correct, but just to be explicit
+    // All threads read from shared memory result
+    uint finalBestIdx = s_bestIdx[0];
+    
+    // Convert back to coordinates
+    uint bestBY = finalBestIdx / gridSize.x;
+    uint bestBX = finalBestIdx - (bestBY * gridSize.x);
+    ivec2 bestSourceBlock = ivec2(bestBX, bestBY);
     
     // All threads copy pixels from the best matching source block
     ivec2 sourcePixel = bestSourceBlock * 16 + localCoord;

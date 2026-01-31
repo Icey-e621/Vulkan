@@ -1,0 +1,49 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) uniform readonly image2D inputImage;
+layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
+
+// Shared memory for reduction within the workgroup (16x16 = 256 threads)
+shared vec4 s_colors[256];
+
+void main() {
+    ivec2 inputSize = imageSize(inputImage);
+    ivec2 outputSize = imageSize(outputImage);
+    
+    ivec2 myBlockPos = ivec2(gl_WorkGroupID.xy);
+    ivec2 localCoord = ivec2(gl_LocalInvocationID.xy);
+    uint threadIndex = gl_LocalInvocationIndex; // 0 to 255
+    
+    // Calculate global pixel coordinate for this thread
+    ivec2 globalPos = myBlockPos * 16 + localCoord;
+    
+    // Load pixel color
+    vec4 color = vec4(0.0);
+    if (globalPos.x < inputSize.x && globalPos.y < inputSize.y) {
+        color = imageLoad(inputImage, globalPos);
+    }
+    
+    // Store in shared memory
+    s_colors[threadIndex] = color;
+    
+    barrier();
+    
+    // Parallel reduction to compute sum
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (threadIndex < s) {
+            s_colors[threadIndex] += s_colors[threadIndex + s];
+        }
+        barrier();
+    }
+    
+    // Thread 0 writes the result
+    if (threadIndex == 0) {
+        vec4 avgColor = s_colors[0] / 256.0;
+        
+        if (myBlockPos.x < outputSize.x && myBlockPos.y < outputSize.y) {
+            imageStore(outputImage, myBlockPos, avgColor);
+        }
+    }
+}

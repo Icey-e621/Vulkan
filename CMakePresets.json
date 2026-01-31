@@ -2,7 +2,7 @@
   "version": 8,
   "configurePresets": [
     {
-      "name": "vcpkg",
+      "name": "Debug_vcpkg",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
@@ -13,7 +13,7 @@
       }
     },
     {
-      "name": "vcpkg",
+      "name": "Release_vcpkg",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
@@ -28,13 +28,13 @@
     {
       "name": "debug",
       "displayName": "Debug",
-      "configurePreset": "vcpkg",
+      "configurePreset": "Debug_vcpkg",
       "configuration": "Debug"
     },
     {
       "name": "release",
       "displayName": "Release",
-      "configurePreset": "vcpkg",
+      "configurePreset": "Release_vcpkg",
       "configuration": "Release"
     }
   ]
