@@ -44,3 +44,14 @@ target_link_libraries(Main
         glm::glm
 )
 add_dependencies(Main Shaders)
+
+# Copy shaders and textures to the build directory
+add_custom_command(TARGET Main POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders
+        $<TARGET_FILE_DIR:Main>/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/textures
+        $<TARGET_FILE_DIR:Main>/textures
+    COMMENT "Copying shaders and textures to binary directory"
+)

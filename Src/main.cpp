@@ -3,15 +3,17 @@
 #include "ExtraFuncs.h"
 #include <unordered_map>
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <stb_image.h>
+#include <stb_image_write.h>
 #include <tiny_obj_loader.h>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
-const std::string TEXTURE_PATH_1 = "../textures/frutas.jpg";
-const std::string TEXTURE_PATH_2 = "../textures/aves.jpg";
+const std::string TEXTURE_PATH_1 = "textures/frutas.jpg";
+const std::string TEXTURE_PATH_2 = "textures/aves.jpg";
 // max queued frames
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -246,19 +248,11 @@ private:
         createComputeDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
-        
-        // Time the mosaic computation
-        auto startTime = std::chrono::high_resolution_clock::now();
-        computeMosaic(); // Run mosaic algorithm once at startup
-        auto endTime = std::chrono::high_resolution_clock::now();
-        
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-        std::cout << "Mosaic computation took: " << duration << " ms" << std::endl;
+        StartMosaic();
     }
     void createColorResources()
     {
         VkFormat colorFormat = swapChainImageFormat;
-
         createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
         colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
@@ -321,6 +315,10 @@ private:
             throw std::runtime_error("failed to load second texture image!");
         }
 
+        // Debug: save original image before any processing
+        stbi_write_png("texture2_original.png", texWidth_local, texHeight_local, 4, pixels, texWidth_local * 4);
+        std::cout << "Saved texture2 original to texture2_original.png" << std::endl;
+
         VkDeviceSize imageSize = texWidth_local * texHeight_local * 4;
         
         VkBuffer stagingBuffer;
@@ -349,7 +347,7 @@ private:
     void createMosaicTextureImage()
     {
         // Create a storage image for the mosaic result with same dimensions as the original texture
-        createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mosaicTextureImage, mosaicTextureImageMemory);
+        createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mosaicTextureImage, mosaicTextureImageMemory);
         mosaicTextureImageView = createImageView(mosaicTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
         transitionImageLayout(mosaicTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
     }
@@ -365,12 +363,16 @@ private:
         texWidth = static_cast<uint32_t>(texWidth_local);
         texHeight = static_cast<uint32_t>(texHeight_local);
         VkDeviceSize imageSize = texWidth * texHeight * 4;
-        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+        mipLevels = 1; // Disable mipmaps
 
         if (!pixels)
         {
             throw std::runtime_error("failed to load texture image!");
         }
+
+        // Debug: save original image before any processing
+        stbi_write_png("texture1_original.png", texWidth, texHeight, 4, pixels, texWidth * 4);
+        std::cout << "Saved texture1 original to texture1_original.png" << std::endl;
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
@@ -386,13 +388,12 @@ private:
         createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
         transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
         copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-        // transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
-        // transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
+        // Transition directly to GENERAL for compute shader use (no mipmaps)
+        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, mipLevels);
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
-
-        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_UNORM, texWidth_local, texHeight_local, mipLevels);
+        // Mipmaps disabled
     }
     /**
      * @brief Instanciate the Descriptor Sets
@@ -784,6 +785,22 @@ private:
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
     }
 
+    // Assuming this is an initialization function where computeMosaic is called once.
+    // The user's provided edit seems to indicate this.
+    void StartMosaic() // Placeholder for the actual initialization function
+    {   
+        // Time the mosaic computation
+        auto startTime = std::chrono::high_resolution_clock::now();
+        computeMosaic(); // Run mosaic algorithm once at startup
+        auto endTime = std::chrono::high_resolution_clock::now();
+        
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+        std::cout << "Mosaic computation took: " << duration << " ms" << std::endl;
+        
+        // Debug: Save mosaic image to file
+        saveMosaicImageToFile();
+    }
+
     /**
      * @brief Create a Command Buffer object
      *
@@ -1011,8 +1028,8 @@ private:
      */
     void createGraphicsPipeline()
     {
-        auto vertShaderCode = readFile("../shaders/vert.spv"); // stream of bytes
-        auto fragShaderCode = readFile("../shaders/frag.spv");
+        auto vertShaderCode = readFile("shaders/vert.spv"); // stream of bytes
+        auto fragShaderCode = readFile("shaders/frag.spv");
 
         auto bindingDescription = Vertex::getBindingDescription();
         auto attributeDescriptions = Vertex::getAttributeDescriptions();
@@ -1177,7 +1194,7 @@ private:
 
     void createComputePipeline()
     {
-        auto compShaderCode = readFile("../shaders/comp.spv");
+        auto compShaderCode = readFile("shaders/comp.spv");
         VkShaderModule compShaderModule = createShaderModule(compShaderCode);
 
         VkPipelineShaderStageCreateInfo shaderStageInfo{};
@@ -1505,7 +1522,7 @@ private:
     {
         for (const auto &availableFormat : availableFormats)
         {
-            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            if (availableFormat.format == VK_FORMAT_B8G8R8A8_UNORM && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             {
                 return availableFormat;
             }
@@ -2317,6 +2334,98 @@ private:
         vkQueueWaitIdle(graphicsQueue);
 
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    }
+
+    void saveMosaicImageToFile()
+    {
+        // Create a staging buffer to read back the image
+        VkDeviceSize imageSize = texWidth * texHeight * 4; // RGBA
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+            stagingBuffer, stagingBufferMemory);
+
+        // Create a command buffer for the copy
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VkCommandBuffer commandBuffer;
+        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        // Transition image to TRANSFER_SRC_OPTIMAL
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = mosaicTextureImage;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        // Copy image to buffer
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {texWidth, texHeight, 1};
+
+        vkCmdCopyImageToBuffer(commandBuffer, mosaicTextureImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 
+            stagingBuffer, 1, &region);
+
+        // Transition image back to GENERAL
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, 
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        vkEndCommandBuffer(commandBuffer);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(graphicsQueue);
+
+        // Map and read the staging buffer
+        void* data;
+        vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+        
+        // Write to PNG file
+        stbi_write_png("mosaic_debug.png", texWidth, texHeight, 4, data, texWidth * 4);
+        std::cout << "Saved mosaic image to mosaic_debug.png" << std::endl;
+        
+        vkUnmapMemory(device, stagingBufferMemory);
+        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
     }
     static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
     {
