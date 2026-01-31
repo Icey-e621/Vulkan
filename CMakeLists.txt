@@ -43,6 +43,8 @@ target_link_libraries(Main
         glfw
         glm::glm
 )
+
+target_compile_definitions(Main PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 add_dependencies(Main Shaders)
 
 # Copy specific resources to the build directory
