@@ -7,6 +7,7 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 #include <tiny_obj_loader.h>
+#include <future>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -107,6 +108,8 @@ public:
 
 private:
 #pragma region Members
+    // save hadle of future
+    std::future<void> handle_jpg;
     // multisampling count
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
     // multisampling extra image buffer
@@ -123,10 +126,10 @@ private:
     VkImageView depthImageView;
     // for textures
     uint32_t mipLevels;
-    uint32_t texWidth, texHeight;  // Store original texture dimensions
+    uint32_t texWidth, texHeight; // Store original texture dimensions
     VkImage textureImage;
     VkImageView textureImageView;
-    VkImage textureImage2;  // Second texture
+    VkImage textureImage2; // Second texture
     VkImageView textureImageView2;
     VkDeviceMemory textureImageMemory2;
     VkSampler textureSampler; // gpu -> what color should this pixel have sampler, sampler responds "let me calculate" -> ok using color (.1,.2,.31415)
@@ -262,22 +265,23 @@ private:
         StartMosaic();
     }
 
-    void createMeanImages() {
+    void createMeanImages()
+    {
         // Create storage images for means (1/16th size of original)
         uint32_t meanWidth = (texWidth + 15) / 16;
         uint32_t meanHeight = (texHeight + 15) / 16;
 
         // Mean Image 1
-        createImage(meanWidth, meanHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, 
-            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, meanImage1, meanImageMemory1);
+        createImage(meanWidth, meanHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM,
+                    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, meanImage1, meanImageMemory1);
         meanImageView1 = createImageView(meanImage1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
         transitionImageLayout(meanImage1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
 
         // Mean Image 2
-        createImage(meanWidth, meanHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, 
-            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, meanImage2, meanImageMemory2);
+        createImage(meanWidth, meanHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM,
+                    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, meanImage2, meanImageMemory2);
         meanImageView2 = createImageView(meanImage2, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
         transitionImageLayout(meanImage2, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
     }
@@ -340,7 +344,7 @@ private:
     {
         int texWidth_local, texHeight_local, texChannels;
         stbi_uc *pixels = stbi_load(TEXTURE_PATH_2.c_str(), &texWidth_local, &texHeight_local, &texChannels, STBI_rgb_alpha);
-        
+
         if (!pixels)
         {
             throw std::runtime_error("failed to load second texture image!");
@@ -351,7 +355,7 @@ private:
         // std::cout << "Saved texture2 original to texture2_original.png" << std::endl;
 
         VkDeviceSize imageSize = texWidth_local * texHeight_local * 4;
-        
+
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
         createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
@@ -472,7 +476,7 @@ private:
         // 0: Mean Pass 1 (Tex1 -> Mean1)
         // 1: Mean Pass 2 (Tex2 -> Mean2)
         // 2: Mosaic Pass (Tex1, Mean1, Mean2 -> Output)
-        
+
         std::vector<VkDescriptorSetLayout> layouts(3, computeDescriptorSetLayout);
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -487,14 +491,15 @@ private:
         }
 
         // Helper to update a set
-        auto updateSet = [&](VkDescriptorSet set, VkImageView input1, VkImageView mean1, VkImageView mean2, VkImageView output) {
+        auto updateSet = [&](VkDescriptorSet set, VkImageView input1, VkImageView mean1, VkImageView mean2, VkImageView output)
+        {
             std::vector<VkWriteDescriptorSet> descriptorWrites;
 
             // Binding 0: Input Image 1
             VkDescriptorImageInfo input1Info{};
             input1Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             input1Info.imageView = input1;
-            
+
             VkWriteDescriptorSet write0{};
             write0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write0.dstSet = set;
@@ -506,7 +511,8 @@ private:
             descriptorWrites.push_back(write0);
 
             // Binding 1: Mean Image 1 (or output for mean pass)
-            if (mean1 != VK_NULL_HANDLE) {
+            if (mean1 != VK_NULL_HANDLE)
+            {
                 VkDescriptorImageInfo mean1Info{};
                 mean1Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 mean1Info.imageView = mean1;
@@ -523,7 +529,8 @@ private:
             }
 
             // Binding 2: Mean Image 2
-            if (mean2 != VK_NULL_HANDLE) {
+            if (mean2 != VK_NULL_HANDLE)
+            {
                 VkDescriptorImageInfo mean2Info{};
                 mean2Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 mean2Info.imageView = mean2;
@@ -540,7 +547,8 @@ private:
             }
 
             // Binding 3: Output Image
-            if (output != VK_NULL_HANDLE) {
+            if (output != VK_NULL_HANDLE)
+            {
                 VkDescriptorImageInfo outputInfo{};
                 outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 outputInfo.imageView = output;
@@ -561,10 +569,10 @@ private:
 
         // Set 0: Mean Pass 1 (Input=Tex1, Output=Mean1) -> Bind Tex1 to 0, Mean1 to 1 (mean shader uses 0 and 1)
         updateSet(computeDescriptorSets[0], textureImageView, meanImageView1, VK_NULL_HANDLE, VK_NULL_HANDLE);
-        
+
         // Set 1: Mean Pass 2 (Input=Tex2, Output=Mean2) -> Bind Tex2 to 0, Mean2 to 1
         updateSet(computeDescriptorSets[1], textureImageView2, meanImageView2, VK_NULL_HANDLE, VK_NULL_HANDLE);
-        
+
         // Set 2: Mosaic Pass (Input=Tex1, Mean1=Mean1, Mean2=Mean2, Output=Mosaic)
         updateSet(computeDescriptorSets[2], textureImageView, meanImageView1, meanImageView2, mosaicTextureImageView);
     }
@@ -620,7 +628,7 @@ private:
         inputImageBinding1.binding = 0;
         inputImageBinding1.descriptorCount = 1;
         std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-        
+
         // Binding 0: Input Image 1 (Full Res)
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -666,8 +674,7 @@ private:
             {{-1.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
             {{1.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}},
             {{1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-            {{-1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
-        };
+            {{-1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}};
 
         indices = {0, 1, 2, 2, 3, 0};
     }
@@ -858,7 +865,7 @@ private:
         // --- BARRIER ---
         // Wait for mean images to be written before reading them in the next pass
         VkImageMemoryBarrier barriers[2] = {};
-        
+
         barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
         barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -874,19 +881,19 @@ private:
         barriers[1] = barriers[0];
         barriers[1].image = meanImage2;
 
-        vkCmdPipelineBarrier(commandBuffer, 
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-            0, 
-            0, nullptr, 
-            0, nullptr, 
-            2, barriers);
+        vkCmdPipelineBarrier(commandBuffer,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0,
+                             0, nullptr,
+                             0, nullptr,
+                             2, barriers);
 
         // --- PASS 2: Compute Mosaic ---
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
-        
+
         // Bind all resources (Set 2)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[2], 0, nullptr);
-        
+
         // Dispatch one workgroup per output block (same as grid size)
         vkCmdDispatch(commandBuffer, gridWidth, gridHeight, 1);
 
@@ -906,20 +913,17 @@ private:
     // Assuming this is an initialization function where computeMosaic is called once.
     // The user's provided edit seems to indicate this.
     void StartMosaic() // Placeholder for the actual initialization function
-    {   
+    {
         // Time the mosaic computation
         auto startTime = std::chrono::high_resolution_clock::now();
         computeMosaic(); // Run mosaic algorithm once at startup
         auto endTime = std::chrono::high_resolution_clock::now();
-        
+
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
-        std::cout << "Mosaic computation took: " << std::format("{:.3f} ms ({})\n", 
-                         duration.count() / 1000.0, duration) << std::endl;
-        
+        std::cout << "Mosaic computation took: " << std::format("{:.3f} ms ({})\n", duration.count() / 1000.0, duration) << std::endl;
+
         // Debug: Save mosaic image to file
-        drawFrame();
-        glfwPollEvents();
-        saveMosaicImageToFile();
+        handle_jpg = std::async(std::launch::async, &HelloTriangleApplication::saveMosaicImageToFile, this);
     }
 
     /**
@@ -1231,7 +1235,7 @@ private:
         multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisampling.sampleShadingEnable = VK_TRUE; // enable sample shading in the pipeline
         multisampling.rasterizationSamples = msaaSamples;
-        multisampling.minSampleShading = .2f;          // Optional
+        multisampling.minSampleShading = .2f;           // Optional
         multisampling.pSampleMask = nullptr;            // Optional
         multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
         multisampling.alphaToOneEnable = VK_FALSE;      // Optional
@@ -1367,23 +1371,23 @@ private:
         // Actually, we can reuse computeDescriptorSetLayout if we just bind everything or use a compatible subset.
         // But for simplicity let's assume we use the same layout or create a new one.
         // To avoid complexity, let's create a dedicated layout for mean shader because binding counts differ.
-        
-        // Wait, I didn't add meanDescriptorSetLayout member. Let's rely on push constants or just use the same layout 
+
+        // Wait, I didn't add meanDescriptorSetLayout member. Let's rely on push constants or just use the same layout
         // with dummy bindings? No, that's messy.
         // Let's use the same layout logic but with a new variable?
         // Actually, looking at member variables, I only added meanPipelineLayout.
         // I should probably define a descriptor set layout for it or reuse.
         // Let's create a simple layout here locally or use the global one if adaptable.
         // The global `computeDescriptorSetLayout` has 4 bindings now. `mean.comp` uses bindings 0 and 1.
-        // If we bind compatible descriptors to 0 and 1, it should work even if layout has more bindings, 
+        // If we bind compatible descriptors to 0 and 1, it should work even if layout has more bindings,
         // PROVIDED the shader declares only what it uses and the pipeline layout matches what we bind.
-        
+
         // Let's just create the pipeline layout using the same descriptor set layout for simplicity,
-        // and ensure we update the descriptor sets accordingly. 
+        // and ensure we update the descriptor sets accordingly.
         // WAIT: `mean.comp` has binding 0 and 1. `mosaic.comp` has 0, 1, 2, 3.
         // If we use the same `computeDescriptorSetLayout` (which has 4 bindings), we must bind all 4 ideally.
         // But `mean.comp` only accesses 0 and 1.
-        
+
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = 1;
@@ -1611,12 +1615,12 @@ private:
             swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-        return //isNotIGPU &&
-               deviceFeatures.geometryShader &&
-               indices.isComplete() &&
-               extensionsSupported &&
-               swapChainAdequate &&
-               deviceFeatures.samplerAnisotropy;
+        return // isNotIGPU &&
+            deviceFeatures.geometryShader &&
+            indices.isComplete() &&
+            extensionsSupported &&
+            swapChainAdequate &&
+            deviceFeatures.samplerAnisotropy;
     }
     bool checkDeviceExtensionSupport(VkPhysicalDevice device)
     {
@@ -1778,11 +1782,30 @@ private:
         imagesInFlight.clear();
         imagesInFlight.resize(swapChainImages.size(), VK_NULL_HANDLE);
     }
+    void clearHandle()
+    {
+
+        // wait_for(0s) checks the status immediately without waiting
+        auto status = handle_jpg.wait_for(std::chrono::seconds(0));
+
+        if (status == std::future_status::ready)
+        {
+            std::cout << "Image saved successfully!" << std::endl;
+
+            // Calling .get() "consumes" the future and releases internal resources
+            handle_jpg.get();
+        }
+    }
 #pragma region MainLoop
     void mainLoop()
     {
         while (!glfwWindowShouldClose(window))
         {
+            if (handle_jpg.valid())
+            {
+                clearHandle();
+            }
+
             drawFrame();
             glfwPollEvents();
         }
@@ -1911,6 +1934,11 @@ private:
 
     void cleanup()
     {
+        if (handle_jpg.valid())
+        {
+            handle_jpg.wait();
+        }
+
         cleanupSwapChain();
 
         vkDestroySampler(device, textureSampler, nullptr);
@@ -2389,7 +2417,7 @@ private:
         transitionImageLayoutCmd(commandBuffer, image, format, oldLayout, newLayout, mipLevels);
         endSingleTimeCommands(commandBuffer);
     }
-    
+
     void transitionImageLayoutCmd(VkCommandBuffer commandBuffer, VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels)
     {
         VkImageMemoryBarrier barrier{};
@@ -2486,8 +2514,7 @@ private:
             0,
             0, nullptr,
             0, nullptr,
-            1, &barrier
-        );
+            1, &barrier);
     }
     VkCommandBuffer beginSingleTimeCommands()
     {
@@ -2530,9 +2557,9 @@ private:
         VkDeviceSize imageSize = texWidth * texHeight * 4; // RGBA
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
-        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
-            stagingBuffer, stagingBufferMemory);
+        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     stagingBuffer, stagingBufferMemory);
 
         // Create a command buffer for the copy
         VkCommandBufferAllocateInfo allocInfo{};
@@ -2565,8 +2592,8 @@ private:
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
         // Copy image to buffer
         VkBufferImageCopy region{};
@@ -2580,8 +2607,8 @@ private:
         region.imageOffset = {0, 0, 0};
         region.imageExtent = {texWidth, texHeight, 1};
 
-        vkCmdCopyImageToBuffer(commandBuffer, mosaicTextureImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 
-            stagingBuffer, 1, &region);
+        vkCmdCopyImageToBuffer(commandBuffer, mosaicTextureImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               stagingBuffer, 1, &region);
 
         // Transition image back to GENERAL
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -2589,8 +2616,8 @@ private:
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, 
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
         vkEndCommandBuffer(commandBuffer);
 
@@ -2599,17 +2626,17 @@ private:
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffer;
 
-        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(graphicsQueue);
+        vkQueueSubmit(presentQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(presentQueue);
 
         // Map and read the staging buffer
-        void* data;
+        void *data;
         vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
-        
+
         // Write to PNG file
         stbi_write_png("momsaic_out.png", texWidth, texHeight, 4, data, texWidth * 4);
         std::cout << "Saved mosaic image to momsaic_out.png" << std::endl;
-        
+
         vkUnmapMemory(device, stagingBufferMemory);
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
         vkDestroyBuffer(device, stagingBuffer, nullptr);
