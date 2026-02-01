@@ -145,12 +145,12 @@ private:
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     // GPU queues
     VkQueue graphicsQueue;
+    VkQueue presentQueue;
+    VkQueue imageQueue;
     // the debug messenger
     VkDebugUtilsMessengerEXT debugMessenger;
     // surface this is where to put it
     VkSurfaceKHR surface;
-    // logical queue
-    VkQueue presentQueue;
     // image swapChain
     VkSwapchainKHR swapChain;
     // the images themselves and data
@@ -1526,14 +1526,21 @@ private:
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
         std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 
-        float queuePriority = 1.0f;
+        float queuePriorities[2] = { 1.0f, 0.5f }; 
         for (uint32_t queueFamily : uniqueQueueFamilies)
         {
             VkDeviceQueueCreateInfo queueCreateInfo{};
             queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
             queueCreateInfo.queueFamilyIndex = queueFamily;
-            queueCreateInfo.queueCount = 1;
-            queueCreateInfo.pQueuePriorities = &queuePriority;
+            if (queueFamily == indices.graphicsFamily.value())
+            {
+                queueCreateInfo.queueCount = 2;
+            }
+            else
+            {
+                queueCreateInfo.queueCount = 1;
+            }
+            queueCreateInfo.pQueuePriorities = queuePriorities;
             queueCreateInfos.push_back(queueCreateInfo);
         }
 
@@ -1569,6 +1576,7 @@ private:
             throw std::runtime_error("failed to create logical device!");
         }
         vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+        vkGetDeviceQueue(device, indices.graphicsFamily.value(), 1, &imageQueue);
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
     }
     void pickPhysicalDevice()
@@ -2626,8 +2634,8 @@ private:
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffer;
 
-        vkQueueSubmit(presentQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(presentQueue);
+        vkQueueSubmit(imageQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(imageQueue);
 
         // Map and read the staging buffer
         void *data;
