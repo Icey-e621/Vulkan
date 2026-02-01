@@ -1611,7 +1611,7 @@ private:
             swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-        return isNotIGPU &&
+        return //isNotIGPU &&
                deviceFeatures.geometryShader &&
                indices.isComplete() &&
                extensionsSupported &&

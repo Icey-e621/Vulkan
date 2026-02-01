@@ -14,8 +14,8 @@ if(MSVC)
     add_compile_options(/Zc:__cplusplus)
 endif()
 
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
+find_package(glfw3 REQUIRED)
+find_package(glm REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(tinyobjloader REQUIRED)
 
