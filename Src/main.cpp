@@ -188,6 +188,9 @@ private:
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> imagesInFlight;
+    // Framerate Logic
+    double deltatime;
+    double oldtime;
 
 #pragma endregion Members
 
@@ -230,6 +233,10 @@ private:
         createDescriptorSets();
         createCommandBuffers();
         createSyncObjects();
+        createCameraObject();
+    }
+    void createCameraObject(){
+        camera = Camera(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f, 0.0f, -1.0f), 0.0f, -90.0f);
     }
     void createColorResources()
     {
@@ -1396,10 +1403,20 @@ private:
 #pragma region MainLoop
     void mainLoop()
     {
+        // initialize time on entry to avoid a huge first-frame delta
+        oldtime = glfwGetTime();
+
         while (!glfwWindowShouldClose(window))
         {
-            drawFrame();
+            double currentTime = glfwGetTime();
+            deltatime = currentTime - oldtime;
+            oldtime = currentTime;
+
+            // Poll events first so callbacks (mouse / scroll) run and update camera state
             glfwPollEvents();
+
+            // Render frame after camera and uniform updates
+            drawFrame();
         }
 
         vkDeviceWaitIdle(device);
@@ -1508,12 +1525,13 @@ private:
         UniformBufferObject ubo{};
         // transformation matrix
         // camera applicable
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(30.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.model = glm::mat4(1.0f);//glm::rotate(glm::mat4(1.0f), time * glm::radians(30.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
         // view vector
-        ubo.view = glm::lookAt(glm::vec3(1.5f, 1.5f, 1.25f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = camera.getViewMatrix();//glm::lookAt(glm::vec3(1.5f, 1.5f, 1.25f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         // projection matrix
-        ubo.proj = glm::perspective(glm::radians(90.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 15000.0f);
+   
+        ubo.proj = camera.getProjectionMatrix(swapChainExtent.width / (float)swapChainExtent.height,0.1f,15000.0f); //glm::perspective(glm::radians(90.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 15000.0f);
         // flip y projection since we have a setup like this
         //  (0.0,0.0)+---------+(1.0,0.0)
         //           |         |
@@ -1673,25 +1691,33 @@ private:
 
     // Keyboard input processing for camera translation
     // Handles discrete directional commands with frame-rate independent timing
-    void processInput(GLFWwindow *window, Camera &camera, float deltaTime)
+    void processInput(GLFWwindow *window, Camera &camera, float deltaTime, int key, int scancode, int action, int mods)
     {
         // WASD movement scheme following standard FPS conventions
         // Each key press translates to a specific directional movement relative to camera orientation
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            camera.processKeyboard(CameraMovement::FORWARD, deltaTime); // Move forward along camera's front vector
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            camera.processKeyboard(CameraMovement::BACKWARD, deltaTime); // Move backward opposite to front vector
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            camera.processKeyboard(CameraMovement::LEFT, deltaTime); // Strafe left along camera's right vector
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            camera.processKeyboard(CameraMovement::RIGHT, deltaTime); // Strafe right along camera's right vector
-
-        // Vertical movement controls for 3D navigation
-        // Space and Control provide intuitive up/down movement
-        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-            camera.processKeyboard(CameraMovement::UP, deltaTime); // Move up along camera's up vector
-        if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS)
-            camera.processKeyboard(CameraMovement::DOWN, deltaTime); // Move down opposite to up vector
+        switch ( key )
+        {
+            case GLFW_KEY_W:
+            camera.processKeyboard(CameraMovement::FORWARD, deltaTime); 
+            break;
+            case GLFW_KEY_A:
+            camera.processKeyboard(CameraMovement::LEFT, deltaTime); 
+            break;
+            case GLFW_KEY_S:
+            camera.processKeyboard(CameraMovement::BACKWARD, deltaTime); 
+            break;
+            case GLFW_KEY_D:
+            camera.processKeyboard(CameraMovement::RIGHT, deltaTime); 
+            break;
+            case GLFW_KEY_SPACE:
+            camera.processKeyboard(CameraMovement::UP, deltaTime); 
+            break;
+            case GLFW_KEY_LEFT_CONTROL:
+            camera.processKeyboard(CameraMovement::LEFT, deltaTime); 
+            break;
+            default:
+            break;
+        }
     }
     // The static wrapper (The Trampoline)
     static void mouseCallback(GLFWwindow *window, double xpos, double ypos)
@@ -1734,7 +1760,7 @@ private:
 
         // Convert mouse movement to camera rotation
         // Delta values drive continuous camera orientation changes
-        camera.processMouseMovement(xoffset, yoffset);
+        camera.processMouseMovement(xoffset, yoffset, true);
     }
     // The static wrapper (The Trampoline)
     static void scrollCallback(GLFWwindow *window, double xoffset, double yoffset)
@@ -1748,16 +1774,27 @@ private:
             app->handleScrollCallback(window, xoffset, yoffset);
         }
     }
-    // Scroll wheel callback for zoom control
-    // Provides intuitive field-of-view adjustment through scroll wheel interaction
     void handleScrollCallback(GLFWwindow *window, double xoffset, double yoffset)
     {
         // Direct scroll-to-zoom mapping
         // Positive yoffset (scroll up) typically zooms in, negative (scroll down) zooms out
         camera.processMouseScroll(yoffset);
     }
-    // Input system initialization and callback registration
-    // Establishes the connection between windowing system and camera control callbacks
+    static void keyCallback(GLFWwindow *window, int key, int scancode, int action, int mods)
+    {
+        // 3. Retrieve the pointer to our specific instance
+        auto app = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+
+        // 4. Forward the call to the actual member function
+        if (app)
+        {
+            app->handleKeyCallback(window, key, scancode, action, mods);
+        }
+    }
+    void handleKeyCallback(GLFWwindow *window, int key, int scancode, int action, int mods)
+    {
+        processInput(window, camera, static_cast<float>(deltatime), key, scancode, action, mods);
+    }
     void setupInputCallbacks(GLFWwindow *window)
     {
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
@@ -1766,6 +1803,7 @@ private:
         // These establish the event-driven connection between hardware input and camera control
         glfwSetCursorPosCallback(window, mouseCallback); // Connect mouse movement to camera rotation
         glfwSetScrollCallback(window, scrollCallback);   // Connect scroll wheel to camera zoom
+        glfwSetKeyCallback(window, keyCallback);
 
         // Configure mouse capture mode for first-person camera behavior
         // Disabling the cursor provides continuous mouse input without cursor interference
