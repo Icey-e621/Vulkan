@@ -573,8 +573,8 @@ private:
         // Set 1: Mean Pass 2 (Input=Tex2, Output=Mean2) -> Bind Tex2 to 0, Mean2 to 1
         updateSet(computeDescriptorSets[1], textureImageView2, meanImageView2, VK_NULL_HANDLE, VK_NULL_HANDLE);
 
-        // Set 2: Mosaic Pass (Input=Tex1, Mean1=Mean1, Mean2=Mean2, Output=Mosaic)
-        updateSet(computeDescriptorSets[2], textureImageView, meanImageView1, meanImageView2, mosaicTextureImageView);
+        // Set 2: Mosaic Pass (Input=Tex1, Target=Tex2, Output=Mosaic)
+        updateSet(computeDescriptorSets[2], textureImageView, textureImageView2, VK_NULL_HANDLE, mosaicTextureImageView);
     }
     void createDescriptorPool()
     {
@@ -851,44 +851,7 @@ private:
         uint32_t gridWidth = (texWidth + 15) / 16;
         uint32_t gridHeight = (texHeight + 15) / 16;
 
-        // --- PASS 1: Compute Means ---
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meanPipeline);
-
-        // Dispatch for Image 1 (Set 0)
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meanPipelineLayout, 0, 1, &computeDescriptorSets[0], 0, nullptr);
-        vkCmdDispatch(commandBuffer, gridWidth, gridHeight, 1);
-
-        // Dispatch for Image 2 (Set 1)
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, meanPipelineLayout, 0, 1, &computeDescriptorSets[1], 0, nullptr);
-        vkCmdDispatch(commandBuffer, gridWidth, gridHeight, 1);
-
-        // --- BARRIER ---
-        // Wait for mean images to be written before reading them in the next pass
-        VkImageMemoryBarrier barriers[2] = {};
-
-        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barriers[0].image = meanImage1;
-        barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barriers[0].subresourceRange.baseMipLevel = 0;
-        barriers[0].subresourceRange.levelCount = 1;
-        barriers[0].subresourceRange.baseArrayLayer = 0;
-        barriers[0].subresourceRange.layerCount = 1;
-
-        barriers[1] = barriers[0];
-        barriers[1].image = meanImage2;
-
-        vkCmdPipelineBarrier(commandBuffer,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0,
-                             0, nullptr,
-                             0, nullptr,
-                             2, barriers);
-
-        // --- PASS 2: Compute Mosaic ---
+        // --- SAD PASS: Compute Mosaic ---
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
 
         // Bind all resources (Set 2)
@@ -1623,12 +1586,31 @@ private:
             swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-        return // isNotIGPU &&
+            swapChainAdequate &&
+            deviceFeatures.samplerAnisotropy;
+
+        bool basicSuitability = // isNotIGPU &&
             deviceFeatures.geometryShader &&
             indices.isComplete() &&
             extensionsSupported &&
             swapChainAdequate &&
             deviceFeatures.samplerAnisotropy;
+
+        // Check for subgroup support in compute stage
+        VkPhysicalDeviceSubgroupProperties subgroupProperties{};
+        subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        subgroupProperties.pNext = nullptr;
+
+        VkPhysicalDeviceProperties2 properties2{};
+        properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties2.pNext = &subgroupProperties;
+
+        vkGetPhysicalDeviceProperties2(device, &properties2);
+
+        bool subgroupsSupported = (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                                  (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT);
+
+        return basicSuitability && subgroupsSupported;
     }
     bool checkDeviceExtensionSupport(VkPhysicalDevice device)
     {
@@ -2037,7 +2019,7 @@ private:
         appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
         appInfo.pEngineName = "No Engine";
         appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-        appInfo.apiVersion = VK_API_VERSION_1_0;
+        appInfo.apiVersion = VK_API_VERSION_1_1;
 
         VkInstanceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;

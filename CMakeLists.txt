@@ -27,7 +27,7 @@ set(Vulkan_GLSLC_EXECUTABLE "glslc")
 foreach(SHADER IN LISTS SHADERS)
     get_filename_component(FILENAME ${SHADER} NAME)
     add_custom_command(OUTPUT ${SHADER_DIR}/${FILENAME}.spv
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SHADER_DIR}/${FILENAME}.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.1 ${SHADER} -o ${SHADER_DIR}/${FILENAME}.spv
         DEPENDS ${SHADER}
         COMMENT "Compiling ${FILENAME}")
 list(APPEND SPV_SHADERS ${SHADER_DIR}/${FILENAME}.spv)
