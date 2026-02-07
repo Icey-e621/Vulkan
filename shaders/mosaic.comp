@@ -8,6 +8,8 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0) uniform sampler2D inputSampler1;
 layout(binding = 1) uniform sampler2D inputSampler2;
 layout(binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(binding = 3) uniform sampler2D sourceMeanSampler;
+layout(binding = 4) uniform sampler2D targetMeanSampler;
 
 // Optimization: SoA prevents bank conflicts
 shared float s_targetR[256];
@@ -29,6 +31,10 @@ void main() {
 
     if (myBlockPos.x >= gridSize.x || myBlockPos.y >= gridSize.y) return;
 
+    // Load target block mean for pruning
+    // Using texelFetch on sampled image for better cache performance
+    vec3 targetMean = texelFetch(targetMeanSampler, myBlockPos, 0).rgb;
+
     // 1. Load into SoA Shared Memory
     if (all(lessThan(targetPixelPos, imgSize))) {
         vec3 pix = texelFetch(inputSampler2, targetPixelPos, 0).rgb;
@@ -43,16 +49,51 @@ void main() {
     
     barrier();
 
-    // 2. Search Loop
+    // 2. Initial Guess: check the block at the same position as 'myBlockPos' 
+    // to establish a tight 'myBestSAD' bound early for pruning.
     float myBestSAD = 1e20;
     uint myBestIdx = 0;
+    
+    // Using texelFetch for a single initial candidate
+    uint initialCandIdx = clamp(myBlockPos.y * gridSize.x + myBlockPos.x, 0, (gridSize.x * gridSize.y) - 1);
+    ivec2 bBaseInitial = ivec2(myBlockPos.x, myBlockPos.y) << 4;
+    float initialSAD = 0.0;
+    uint strideInit = gl_SubgroupSize;
+    for (uint p = gl_SubgroupInvocationID; p < 256; p += (strideInit * 2)) {
+        ivec2 pCoord1 = ivec2(p & 0xF, p >> 4);
+        vec3 s1 = texelFetch(inputSampler1, bBaseInitial + pCoord1, 0).rgb;
+        initialSAD += abs(s_targetR[p] - s1.r) + abs(s_targetG[p] - s1.g) + abs(s_targetB[p] - s1.b);
+        uint p2 = p + strideInit;
+        if (p2 < 256) {
+            ivec2 pCoord2 = ivec2(p2 & 0xF, p2 >> 4);
+            vec3 s2 = texelFetch(inputSampler1, bBaseInitial + pCoord2, 0).rgb;
+            initialSAD += abs(s_targetR[p2] - s2.r) + abs(s_targetG[p2] - s2.g) + abs(s_targetB[p2] - s2.b);
+        }
+    }
+    initialSAD = subgroupAdd(initialSAD);
+    myBestSAD = initialSAD;
+    myBestIdx = initialCandIdx;
+
+    // 3. Search Loop
     uint totalBlocks = gridSize.x * gridSize.y;
     uint gWidth = gridSize.x;
 
     for (uint i = gl_SubgroupID; i < totalBlocks; i += gl_NumSubgroups) {
         uint by = i / gWidth;
         uint bx = i % gWidth;
-        ivec2 bBase = ivec2(bx, by) << 4; 
+        ivec2 meanCoord = ivec2(bx, by);
+
+        // --- PRUNING PASS ---
+        // First check the SAD of the means. If it's too high, skip the 256-pixel loop.
+        vec3 sourceMean = texelFetch(sourceMeanSampler, meanCoord, 0).rgb;
+        float meanSAD = abs(targetMean.r - sourceMean.r) + abs(targetMean.g - sourceMean.g) + abs(targetMean.b - sourceMean.b);
+        
+        // MATHEMATICAL GUARANTEE: pixelSAD >= meanSAD * 256.0
+        // Because |sum(a-b)/256| <= sum(|a-b|)/256
+        // If the MINIMUM possible pixelSAD is already worse than our best, prune it.
+        if (meanSAD * 256.0 >= myBestSAD) continue; 
+
+        ivec2 bBase = meanCoord << 4; 
                 
         float currentBlockSAD = 0.0;
         uint stride = gl_SubgroupSize;
@@ -75,11 +116,10 @@ void main() {
 
         currentBlockSAD = subgroupAdd(currentBlockSAD);
 
-        if (subgroupElect()) {
-            if (currentBlockSAD < myBestSAD) {
-                myBestSAD = currentBlockSAD;
-                myBestIdx = i;
-            }
+        // SYNC: Update myBestSAD for ALL threads in the subgroup so the NEXT candidate prunes correctly
+        if (currentBlockSAD < myBestSAD) {
+            myBestSAD = currentBlockSAD;
+            myBestIdx = i;
         }
     }
 
