@@ -1455,7 +1455,7 @@ private:
             swapChainAdequate &&
             deviceFeatures.samplerAnisotropy;
 
-        bool basicSuitability = // isNotIGPU &&
+        bool basicSuitability = isNotIGPU &&
             deviceFeatures.geometryShader &&
             indices.isComplete() &&
             extensionsSupported &&

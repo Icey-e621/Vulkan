@@ -1,14 +1,20 @@
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : enable
+// Standard extension for shuffling/broadcasting
+#extension GL_KHR_shader_subgroup_ballot : enable 
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0) uniform sampler2D inputSampler1; // Source (Blocks to use)
-layout(binding = 1) uniform sampler2D inputSampler2; // Target (Image to recreate)
+layout(binding = 0) uniform sampler2D inputSampler1;
+layout(binding = 1) uniform sampler2D inputSampler2;
 layout(binding = 2, rgba8) uniform writeonly image2D outputImage;
 
-// Shared memory for target block cache and final reduction
-shared vec3 s_targetPixels[256]; 
+// Optimization: SoA prevents bank conflicts
+shared float s_targetR[256];
+shared float s_targetG[256];
+shared float s_targetB[256];
+
+// Optimization: Minimized shared memory for inter-subgroup communication
 shared float s_subgroupBestSADs[32];
 shared uint s_subgroupBestIdxs[32];
 shared uint s_finalBestIdx;
@@ -16,48 +22,57 @@ shared uint s_finalBestIdx;
 void main() {
     ivec2 imgSize = textureSize(inputSampler1, 0);
     ivec2 myBlockPos = ivec2(gl_WorkGroupID.xy);
-    ivec2 localCoord = ivec2(gl_LocalInvocationID.xy);
     uint threadIndex = gl_LocalInvocationIndex;
+    ivec2 localCoord = ivec2(gl_LocalInvocationID.xy);
     ivec2 targetPixelPos = myBlockPos * 16 + localCoord;
     ivec2 gridSize = (imgSize + 15) / 16;
 
     if (myBlockPos.x >= gridSize.x || myBlockPos.y >= gridSize.y) return;
 
-    // 1. Cache Target Block into Shared Memory
-    // Using texelFetch for integer-based, hardware-cached loads
-    vec3 targetPixel = vec3(0.0);
+    // 1. Load into SoA Shared Memory
     if (all(lessThan(targetPixelPos, imgSize))) {
-        targetPixel = texelFetch(inputSampler2, targetPixelPos, 0).rgb;
+        vec3 pix = texelFetch(inputSampler2, targetPixelPos, 0).rgb;
+        s_targetR[threadIndex] = pix.r;
+        s_targetG[threadIndex] = pix.g;
+        s_targetB[threadIndex] = pix.b;
+    } else {
+        s_targetR[threadIndex] = 0.0;
+        s_targetG[threadIndex] = 0.0;
+        s_targetB[threadIndex] = 0.0;
     }
-    s_targetPixels[threadIndex] = targetPixel;
     
     barrier();
 
-    // 2. Distributed Search across Subgroups
+    // 2. Search Loop
     float myBestSAD = 1e20;
     uint myBestIdx = 0;
     uint totalBlocks = gridSize.x * gridSize.y;
+    uint gWidth = gridSize.x;
 
     for (uint i = gl_SubgroupID; i < totalBlocks; i += gl_NumSubgroups) {
-        uint by = i / gridSize.x;
-        uint bx = i - (by * gridSize.x);
-        ivec2 bBase = ivec2(bx, by) * 16;
-        
+        uint by = i / gWidth;
+        uint bx = i % gWidth;
+        ivec2 bBase = ivec2(bx, by) << 4; 
+                
         float currentBlockSAD = 0.0;
+        uint stride = gl_SubgroupSize;
 
-        // Threads in subgroup collaborate on searching block 'i'
-        for (uint p = gl_SubgroupInvocationID; p < 256; p += gl_SubgroupSize) {
-            ivec2 pCoord = ivec2(p & 0xF, p >> 4);
-            ivec2 spPos = bBase + pCoord;
-            
-            // hardware-optimized fetch
-            vec3 s = texelFetch(inputSampler1, spPos, 0).rgb;
-            
-            // SIMD Channel SAD
-            currentBlockSAD += dot(abs(s_targetPixels[p] - s), vec3(1.0));
+        // Optimization: Manual Unrolling (Factor of 2)
+        for (uint p = gl_SubgroupInvocationID; p < 256; p += (stride * 2)) {
+            // Pixel 1
+            ivec2 pCoord1 = ivec2(p & 0xF, p >> 4);
+            vec3 s1 = texelFetch(inputSampler1, bBase + pCoord1, 0).rgb;
+            currentBlockSAD += abs(s_targetR[p] - s1.r) + abs(s_targetG[p] - s1.g) + abs(s_targetB[p] - s1.b);
+
+            // Pixel 2
+            uint p2 = p + stride;
+            if (p2 < 256) {
+                ivec2 pCoord2 = ivec2(p2 & 0xF, p2 >> 4);
+                vec3 s2 = texelFetch(inputSampler1, bBase + pCoord2, 0).rgb;
+                currentBlockSAD += abs(s_targetR[p2] - s2.r) + abs(s_targetG[p2] - s2.g) + abs(s_targetB[p2] - s2.b);
+            }
         }
 
-        // Parallel reduction within subgroup
         currentBlockSAD = subgroupAdd(currentBlockSAD);
 
         if (subgroupElect()) {
@@ -68,7 +83,7 @@ void main() {
         }
     }
 
-    // 3. Final Collaborative Reduction
+    // 3. Reduction using Subgroup-Friendly Shared Memory
     if (subgroupElect()) {
         s_subgroupBestSADs[gl_SubgroupID] = myBestSAD;
         s_subgroupBestIdxs[gl_SubgroupID] = myBestIdx;
@@ -76,25 +91,25 @@ void main() {
 
     barrier();
 
-    if (threadIndex == 0) {
-        float finalBestSAD = s_subgroupBestSADs[0];
-        uint finalBestIdx = s_subgroupBestIdxs[0];
-        uint numSubgroups = gl_NumSubgroups; 
-        for (uint j = 1; j < numSubgroups; j++) {
-            if (s_subgroupBestSADs[j] < finalBestSAD) {
-                finalBestSAD = s_subgroupBestSADs[j];
-                finalBestIdx = s_subgroupBestIdxs[j];
-            }
+    // Only one subgroup handles the final comparison to maximize occupancy
+    if (gl_SubgroupID == 0) {
+        float finalBestSAD = s_subgroupBestSADs[threadIndex];
+        uint finalBestIdx = s_subgroupBestIdxs[threadIndex];
+        
+        // Use subgroup min to find the workgroup best without a loop
+        float workgroupMinSAD = subgroupMin(threadIndex < gl_NumSubgroups ? finalBestSAD : 1e20);
+        
+        if (finalBestSAD == workgroupMinSAD && threadIndex < gl_NumSubgroups) {
+            s_finalBestIdx = finalBestIdx;
         }
-        s_finalBestIdx = finalBestIdx;
     }
 
     barrier();
 
-    // 4. Final Export
-    uint bestBY = s_finalBestIdx / gridSize.x;
-    uint bestBX = s_finalBestIdx - (bestBY * gridSize.x);
-    ivec2 bestSourcePixelPos = ivec2(bestBX, bestBY) * 16 + localCoord;
+    // 4. Export
+    uint bestBY = s_finalBestIdx / gWidth;
+    uint bestBX = s_finalBestIdx % gWidth;
+    ivec2 bestSourcePixelPos = (ivec2(bestBX, bestBY) << 4) + localCoord;
 
     if (all(lessThan(targetPixelPos, imgSize))) {
         vec4 color = texelFetch(inputSampler1, bestSourcePixelPos, 0);
