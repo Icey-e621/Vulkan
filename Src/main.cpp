@@ -171,16 +171,6 @@ private:
     VkImage mosaicTextureImage;
     VkImageView mosaicTextureImageView;
     VkDeviceMemory mosaicTextureImageMemory;
-    // mean images
-    VkImage meanImage1;
-    VkImageView meanImageView1;
-    VkDeviceMemory meanImageMemory1;
-    VkImage meanImage2;
-    VkImageView meanImageView2;
-    VkDeviceMemory meanImageMemory2;
-    // mean pipeline
-    VkPipeline meanPipeline;
-    VkPipelineLayout meanPipelineLayout;
     // the renedering
     VkRenderPass renderPass;
     // ENDED PIPELINE
@@ -240,7 +230,6 @@ private:
         createDescriptorSetLayout();
         createComputeDescriptorSetLayout();
         createGraphicsPipeline();
-        createMeanPipeline();
         createComputePipeline();
         createCommandPool();
         createColorResources();
@@ -251,7 +240,6 @@ private:
         createTextureImage2();
         createTextureImageView2();
         createTextureSampler();
-        createMeanImages();
         createMosaicTextureImage();
         loadModel();
         createVertexBuffer();
@@ -265,26 +253,7 @@ private:
         StartMosaic();
     }
 
-    void createMeanImages()
-    {
-        // Create storage images for means (1/16th size of original)
-        uint32_t meanWidth = (texWidth + 15) / 16;
-        uint32_t meanHeight = (texHeight + 15) / 16;
 
-        // Mean Image 1
-        createImage(meanWidth, meanHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM,
-                    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, meanImage1, meanImageMemory1);
-        meanImageView1 = createImageView(meanImage1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-        transitionImageLayout(meanImage1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
-
-        // Mean Image 2
-        createImage(meanWidth, meanHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM,
-                    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, meanImage2, meanImageMemory2);
-        meanImageView2 = createImageView(meanImage2, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-        transitionImageLayout(meanImage2, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
-    }
     void createColorResources()
     {
         VkFormat colorFormat = swapChainImageFormat;
@@ -472,109 +441,74 @@ private:
     }
     void createComputeDescriptorSets()
     {
-        // We need 3 descriptor sets:
-        // 0: Mean Pass 1 (Tex1 -> Mean1)
-        // 1: Mean Pass 2 (Tex2 -> Mean2)
-        // 2: Mosaic Pass (Tex1, Mean1, Mean2 -> Output)
+        // Now we only need 1 descriptor set for the mosaic pass
+        // 0: Input Image 1 (Sampler2D)
+        // 1: Input Image 2 (Sampler2D)
+        // 2: Output Image (Storage)
 
-        std::vector<VkDescriptorSetLayout> layouts(3, computeDescriptorSetLayout);
+        VkDescriptorSetLayout layouts[] = { computeDescriptorSetLayout };
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         allocInfo.descriptorPool = descriptorPool;
-        allocInfo.descriptorSetCount = 3;
-        allocInfo.pSetLayouts = layouts.data();
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = layouts;
 
-        computeDescriptorSets.resize(3);
+        computeDescriptorSets.resize(1);
         if (vkAllocateDescriptorSets(device, &allocInfo, computeDescriptorSets.data()) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to allocate compute descriptor sets!");
         }
 
-        // Helper to update a set
-        auto updateSet = [&](VkDescriptorSet set, VkImageView input1, VkImageView mean1, VkImageView mean2, VkImageView output)
-        {
-            std::vector<VkWriteDescriptorSet> descriptorWrites;
+        std::vector<VkWriteDescriptorSet> descriptorWrites;
 
-            // Binding 0: Input Image 1
-            VkDescriptorImageInfo input1Info{};
-            input1Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            input1Info.imageView = input1;
+        // Binding 0: Input Sampler (Source)
+        VkDescriptorImageInfo input1Info{};
+        input1Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        input1Info.imageView = textureImageView;
+        input1Info.sampler = textureSampler;
 
-            VkWriteDescriptorSet write0{};
-            write0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write0.dstSet = set;
-            write0.dstBinding = 0;
-            write0.dstArrayElement = 0;
-            write0.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            write0.descriptorCount = 1;
-            write0.pImageInfo = &input1Info;
-            descriptorWrites.push_back(write0);
+        VkWriteDescriptorSet write0{};
+        write0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write0.dstSet = computeDescriptorSets[0];
+        write0.dstBinding = 0;
+        write0.dstArrayElement = 0;
+        write0.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write0.descriptorCount = 1;
+        write0.pImageInfo = &input1Info;
+        descriptorWrites.push_back(write0);
 
-            // Binding 1: Mean Image 1 (or output for mean pass)
-            if (mean1 != VK_NULL_HANDLE)
-            {
-                VkDescriptorImageInfo mean1Info{};
-                mean1Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                mean1Info.imageView = mean1;
+        // Binding 1: Input Sampler (Target)
+        VkDescriptorImageInfo input2Info{};
+        input2Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        input2Info.imageView = textureImageView2;
+        input2Info.sampler = textureSampler;
 
-                VkWriteDescriptorSet write1{};
-                write1.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write1.dstSet = set;
-                write1.dstBinding = 1;
-                write1.dstArrayElement = 0;
-                write1.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                write1.descriptorCount = 1;
-                write1.pImageInfo = &mean1Info;
-                descriptorWrites.push_back(write1);
-            }
+        VkWriteDescriptorSet write1{};
+        write1.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write1.dstSet = computeDescriptorSets[0];
+        write1.dstBinding = 1;
+        write1.dstArrayElement = 0;
+        write1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write1.descriptorCount = 1;
+        write1.pImageInfo = &input2Info;
+        descriptorWrites.push_back(write1);
 
-            // Binding 2: Mean Image 2
-            if (mean2 != VK_NULL_HANDLE)
-            {
-                VkDescriptorImageInfo mean2Info{};
-                mean2Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                mean2Info.imageView = mean2;
+        // Binding 2: Output Image (Storage)
+        VkDescriptorImageInfo outputInfo{};
+        outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        outputInfo.imageView = mosaicTextureImageView;
 
-                VkWriteDescriptorSet write2{};
-                write2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write2.dstSet = set;
-                write2.dstBinding = 2;
-                write2.dstArrayElement = 0;
-                write2.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                write2.descriptorCount = 1;
-                write2.pImageInfo = &mean2Info;
-                descriptorWrites.push_back(write2);
-            }
+        VkWriteDescriptorSet write2{};
+        write2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write2.dstSet = computeDescriptorSets[0];
+        write2.dstBinding = 2;
+        write2.dstArrayElement = 0;
+        write2.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        write2.descriptorCount = 1;
+        write2.pImageInfo = &outputInfo;
+        descriptorWrites.push_back(write2);
 
-            // Binding 3: Output Image
-            if (output != VK_NULL_HANDLE)
-            {
-                VkDescriptorImageInfo outputInfo{};
-                outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                outputInfo.imageView = output;
-
-                VkWriteDescriptorSet write3{};
-                write3.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                write3.dstSet = set;
-                write3.dstBinding = 3;
-                write3.dstArrayElement = 0;
-                write3.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                write3.descriptorCount = 1;
-                write3.pImageInfo = &outputInfo;
-                descriptorWrites.push_back(write3);
-            }
-
-            vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
-        };
-
-        // Set 0: Mean Pass 1 (Input=Tex1, Output=Mean1) -> Bind Tex1 to 0, Mean1 to 1 (mean shader uses 0 and 1)
-        updateSet(computeDescriptorSets[0], textureImageView, meanImageView1, VK_NULL_HANDLE, VK_NULL_HANDLE);
-
-        // Set 1: Mean Pass 2 (Input=Tex2, Output=Mean2) -> Bind Tex2 to 0, Mean2 to 1
-        updateSet(computeDescriptorSets[1], textureImageView2, meanImageView2, VK_NULL_HANDLE, VK_NULL_HANDLE);
-
-        // Set 2: Mosaic Pass (Input=Tex1, Target=Tex2, Output=Mosaic)
-        updateSet(computeDescriptorSets[2], textureImageView, textureImageView2, VK_NULL_HANDLE, mosaicTextureImageView);
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
     void createDescriptorPool()
     {
@@ -623,39 +557,28 @@ private:
     }
     void createComputeDescriptorSetLayout()
     {
-        // input texture 1
-        VkDescriptorSetLayoutBinding inputImageBinding1{};
-        inputImageBinding1.binding = 0;
-        inputImageBinding1.descriptorCount = 1;
-        std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
 
-        // Binding 0: Input Image 1 (Full Res)
+        // Binding 0: Input Sampler 1 (Source)
         bindings[0].binding = 0;
-        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         bindings[0].pImmutableSamplers = nullptr;
 
-        // Binding 1: Mean Image 1 (Low Res)
+        // Binding 1: Input Sampler 2 (Target)
         bindings[1].binding = 1;
-        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         bindings[1].pImmutableSamplers = nullptr;
 
-        // Binding 2: Mean Image 2 (Low Res)
+        // Binding 2: Output Image (Storage)
         bindings[2].binding = 2;
         bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bindings[2].descriptorCount = 1;
         bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         bindings[2].pImmutableSamplers = nullptr;
-
-        // Binding 3: Output Image
-        bindings[3].binding = 3;
-        bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        bindings[3].descriptorCount = 1;
-        bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        bindings[3].pImmutableSamplers = nullptr;
 
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -854,8 +777,8 @@ private:
         // --- SAD PASS: Compute Mosaic ---
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
 
-        // Bind all resources (Set 2)
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[2], 0, nullptr);
+        // Bind all resources (Set 0)
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[0], 0, nullptr);
 
         // Dispatch one workgroup per output block (same as grid size)
         vkCmdDispatch(commandBuffer, gridWidth, gridHeight, 1);
@@ -1315,64 +1238,7 @@ private:
         vkDestroyShaderModule(device, computeShaderModule, nullptr);
     }
 
-    void createMeanPipeline()
-    {
-        auto computeShaderCode = readFile("shaders/mean.comp.spv");
 
-        VkShaderModule computeShaderModule = createShaderModule(computeShaderCode);
-
-        VkPipelineShaderStageCreateInfo computeShaderStageInfo{};
-        computeShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        computeShaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        computeShaderStageInfo.module = computeShaderModule;
-        computeShaderStageInfo.pName = "main";
-
-        // Reuse the compute descriptor set layout since it's compatible enough (or create a new one if needed)
-        // But mean shader only needs 2 storage images (input, output).
-        // Let's create a specific layout for it or just reuse the big one and bind nulls?
-        // Better to reuse the layout if possible or creating a small specific one.
-        // Actually, we can reuse computeDescriptorSetLayout if we just bind everything or use a compatible subset.
-        // But for simplicity let's assume we use the same layout or create a new one.
-        // To avoid complexity, let's create a dedicated layout for mean shader because binding counts differ.
-
-        // Wait, I didn't add meanDescriptorSetLayout member. Let's rely on push constants or just use the same layout
-        // with dummy bindings? No, that's messy.
-        // Let's use the same layout logic but with a new variable?
-        // Actually, looking at member variables, I only added meanPipelineLayout.
-        // I should probably define a descriptor set layout for it or reuse.
-        // Let's create a simple layout here locally or use the global one if adaptable.
-        // The global `computeDescriptorSetLayout` has 4 bindings now. `mean.comp` uses bindings 0 and 1.
-        // If we bind compatible descriptors to 0 and 1, it should work even if layout has more bindings,
-        // PROVIDED the shader declares only what it uses and the pipeline layout matches what we bind.
-
-        // Let's just create the pipeline layout using the same descriptor set layout for simplicity,
-        // and ensure we update the descriptor sets accordingly.
-        // WAIT: `mean.comp` has binding 0 and 1. `mosaic.comp` has 0, 1, 2, 3.
-        // If we use the same `computeDescriptorSetLayout` (which has 4 bindings), we must bind all 4 ideally.
-        // But `mean.comp` only accesses 0 and 1.
-
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount = 1;
-        pipelineLayoutInfo.pSetLayouts = &computeDescriptorSetLayout; // Reusing for now, assuming bindings 0 and 1 match intent
-
-        if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &meanPipelineLayout) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create mean pipeline layout!");
-        }
-
-        VkComputePipelineCreateInfo pipelineInfo{};
-        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        pipelineInfo.layout = meanPipelineLayout;
-        pipelineInfo.stage = computeShaderStageInfo;
-
-        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &meanPipeline) != VK_SUCCESS)
-        {
-            throw std::runtime_error("failed to create mean pipeline!");
-        }
-
-        vkDestroyShaderModule(device, computeShaderModule, nullptr);
-    }
 
     /*
      * @brief to actually make shaders usable
@@ -1944,13 +1810,7 @@ private:
         vkDestroyImage(device, mosaicTextureImage, nullptr);
         vkFreeMemory(device, mosaicTextureImageMemory, nullptr);
 
-        vkDestroyImageView(device, meanImageView1, nullptr);
-        vkDestroyImage(device, meanImage1, nullptr);
-        vkFreeMemory(device, meanImageMemory1, nullptr);
 
-        vkDestroyImageView(device, meanImageView2, nullptr);
-        vkDestroyImage(device, meanImage2, nullptr);
-        vkFreeMemory(device, meanImageMemory2, nullptr);
 
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
@@ -1972,8 +1832,7 @@ private:
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyPipeline(device, computePipeline, nullptr);
         vkDestroyPipelineLayout(device, computePipelineLayout, nullptr);
-        vkDestroyPipeline(device, meanPipeline, nullptr);
-        vkDestroyPipelineLayout(device, meanPipelineLayout, nullptr);
+
 
         vkDestroyRenderPass(device, renderPass, nullptr);
 

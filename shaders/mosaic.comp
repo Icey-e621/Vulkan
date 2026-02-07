@@ -3,100 +3,101 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0, rgba8) uniform readonly image2D inputImage1; // Source (Blocks to use)
-layout(binding = 1, rgba8) uniform readonly image2D inputImage2; // Target (Image to recreate)
-layout(binding = 3, rgba8) uniform writeonly image2D outputImage;
+layout(binding = 0) uniform sampler2D inputSampler1; // Source (Blocks to use)
+layout(binding = 1) uniform sampler2D inputSampler2; // Target (Image to recreate)
+layout(binding = 2, rgba8) uniform writeonly image2D outputImage;
 
-// Shared memory for reduction
-shared vec3 s_targetPixels[256];
-shared float s_subgroupSADs[32]; 
-shared float s_bestSAD;
-shared uint s_bestIdx;
+// Shared memory for target block cache and final reduction
+shared vec3 s_targetPixels[256]; 
+shared float s_subgroupBestSADs[32];
+shared uint s_subgroupBestIdxs[32];
+shared uint s_finalBestIdx;
 
 void main() {
-    ivec2 imgSize = imageSize(inputImage1);
+    ivec2 imgSize = textureSize(inputSampler1, 0);
     ivec2 myBlockPos = ivec2(gl_WorkGroupID.xy);
     ivec2 localCoord = ivec2(gl_LocalInvocationID.xy);
     uint threadIndex = gl_LocalInvocationIndex;
-    
     ivec2 targetPixelPos = myBlockPos * 16 + localCoord;
-    
-    // 1. Load the target block into shared memory once
+    ivec2 gridSize = (imgSize + 15) / 16;
+
+    if (myBlockPos.x >= gridSize.x || myBlockPos.y >= gridSize.y) return;
+
+    // 1. Cache Target Block into Shared Memory
+    // Using texelFetch for integer-based, hardware-cached loads
     vec3 targetPixel = vec3(0.0);
-    if (targetPixelPos.x < imgSize.x && targetPixelPos.y < imgSize.y) {
-        targetPixel = imageLoad(inputImage2, targetPixelPos).rgb;
+    if (all(lessThan(targetPixelPos, imgSize))) {
+        targetPixel = texelFetch(inputSampler2, targetPixelPos, 0).rgb;
     }
     s_targetPixels[threadIndex] = targetPixel;
     
-    if (threadIndex == 0) {
-        s_bestSAD = 1e20;
-        s_bestIdx = 0;
-    }
-    
     barrier();
-    
-    // Bounds check for the whole workgroup block
-    ivec2 gridSize = (imgSize + ivec2(15, 15)) / 16;
-    if (myBlockPos.x >= gridSize.x || myBlockPos.y >= gridSize.y) return;
-    
+
+    // 2. Distributed Search across Subgroups
+    float myBestSAD = 1e20;
+    uint myBestIdx = 0;
     uint totalBlocks = gridSize.x * gridSize.y;
-    
-    // 2. Iterate through all source blocks and calculate SAD
-    for (uint i = 0; i < totalBlocks; i++) {
+
+    for (uint i = gl_SubgroupID; i < totalBlocks; i += gl_NumSubgroups) {
         uint by = i / gridSize.x;
         uint bx = i - (by * gridSize.x);
+        ivec2 bBase = ivec2(bx, by) * 16;
         
-        ivec2 sourcePixelPos = ivec2(bx, by) * 16 + localCoord;
-        
-        // Load source pixel
-        vec3 sourcePixel = vec3(0.0);
-        if (sourcePixelPos.x < imgSize.x && sourcePixelPos.y < imgSize.y) {
-            sourcePixel = imageLoad(inputImage1, sourcePixelPos).rgb;
-        }
-        
-        // Calculate Absolute Difference for this pixel/thread
-        vec3 diff = abs(targetPixel - sourcePixel);
-        float pixelSAD = diff.r + diff.g + diff.b;
-        
-        // Use subgroup operations (SIMD) to sum SAD within subgroups
-        float groupSum = subgroupAdd(pixelSAD);
-        
-        // Collaborative reduction: store subgroup sums in shared memory
-        if (subgroupElect()) {
-            s_subgroupSADs[gl_SubgroupID] = groupSum;
-        }
-        
-        barrier(); // Sync subgroup sums
-        
-        // Thread 0 of first subgroup finishes the reduction across subgroups
-        if (gl_SubgroupID == 0) {
-            float totalSAD = (threadIndex < gl_NumSubgroups) ? s_subgroupSADs[threadIndex] : 0.0;
-            totalSAD = subgroupAdd(totalSAD);
+        float currentBlockSAD = 0.0;
+
+        // Threads in subgroup collaborate on searching block 'i'
+        for (uint p = gl_SubgroupInvocationID; p < 256; p += gl_SubgroupSize) {
+            ivec2 pCoord = ivec2(p & 0xF, p >> 4);
+            ivec2 spPos = bBase + pCoord;
             
-            if (threadIndex == 0) {
-                if (totalSAD < s_bestSAD) {
-                    s_bestSAD = totalSAD;
-                    s_bestIdx = i;
-                }
+            // hardware-optimized fetch
+            vec3 s = texelFetch(inputSampler1, spPos, 0).rgb;
+            
+            // SIMD Channel SAD
+            currentBlockSAD += dot(abs(s_targetPixels[p] - s), vec3(1.0));
+        }
+
+        // Parallel reduction within subgroup
+        currentBlockSAD = subgroupAdd(currentBlockSAD);
+
+        if (subgroupElect()) {
+            if (currentBlockSAD < myBestSAD) {
+                myBestSAD = currentBlockSAD;
+                myBestIdx = i;
             }
         }
-        
-        barrier(); // Sync best match update before next iteration
     }
-    
-    // 3. Thread 0 has found the best matching block index
-    uint finalBestIdx = s_bestIdx;
-    
-    // Convert back to coordinates
-    uint bestBY = finalBestIdx / gridSize.x;
-    uint bestBX = finalBestIdx - (bestBY * gridSize.x);
-    ivec2 bestSourceBlock = ivec2(bestBX, bestBY);
-    ivec2 bestSourcePixelPos = bestSourceBlock * 16 + localCoord;
-    
-    // All threads copy their respective pixels from the best matching source block
-    if (targetPixelPos.x < imgSize.x && targetPixelPos.y < imgSize.y &&
-        bestSourcePixelPos.x < imgSize.x && bestSourcePixelPos.y < imgSize.y) {
-        vec4 color = imageLoad(inputImage1, bestSourcePixelPos);
+
+    // 3. Final Collaborative Reduction
+    if (subgroupElect()) {
+        s_subgroupBestSADs[gl_SubgroupID] = myBestSAD;
+        s_subgroupBestIdxs[gl_SubgroupID] = myBestIdx;
+    }
+
+    barrier();
+
+    if (threadIndex == 0) {
+        float finalBestSAD = s_subgroupBestSADs[0];
+        uint finalBestIdx = s_subgroupBestIdxs[0];
+        uint numSubgroups = gl_NumSubgroups; 
+        for (uint j = 1; j < numSubgroups; j++) {
+            if (s_subgroupBestSADs[j] < finalBestSAD) {
+                finalBestSAD = s_subgroupBestSADs[j];
+                finalBestIdx = s_subgroupBestIdxs[j];
+            }
+        }
+        s_finalBestIdx = finalBestIdx;
+    }
+
+    barrier();
+
+    // 4. Final Export
+    uint bestBY = s_finalBestIdx / gridSize.x;
+    uint bestBX = s_finalBestIdx - (bestBY * gridSize.x);
+    ivec2 bestSourcePixelPos = ivec2(bestBX, bestBY) * 16 + localCoord;
+
+    if (all(lessThan(targetPixelPos, imgSize))) {
+        vec4 color = texelFetch(inputSampler1, bestSourcePixelPos, 0);
         imageStore(outputImage, targetPixelPos, color);
     }
 }
