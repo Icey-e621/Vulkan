@@ -972,6 +972,7 @@ private:
         // --- PASS 3: Optimized Mosaic with Pruning ---
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[0], 0, nullptr);
+        auto startTime = std::chrono::high_resolution_clock::now();
         vkCmdDispatch(commandBuffer, gridWidth, gridHeight, 1);
 
         vkEndCommandBuffer(commandBuffer);
@@ -983,6 +984,10 @@ private:
 
         vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
         vkQueueWaitIdle(graphicsQueue);
+        auto endTime = std::chrono::high_resolution_clock::now();
+
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime);
+        std::cout << "Mosaic dispatch 3 took: " << std::format("{:.3f} ms ({})\n", duration.count() / 1000.0, duration) << std::endl;
 
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
     }

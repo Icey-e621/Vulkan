@@ -1,7 +1,8 @@
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : enable
-// Standard extension for shuffling/broadcasting
 #extension GL_KHR_shader_subgroup_ballot : enable 
+#extension GL_KHR_shader_subgroup_vote : enable 
+#extension GL_KHR_shader_subgroup_shuffle : enable
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
@@ -11,12 +12,13 @@ layout(binding = 2, rgba8) uniform writeonly image2D outputImage;
 layout(binding = 3) uniform sampler2D sourceMeanSampler;
 layout(binding = 4) uniform sampler2D targetMeanSampler;
 
-// Optimization: SoA prevents bank conflicts
-shared float s_targetR[256];
-shared float s_targetG[256];
-shared float s_targetB[256];
+// Optimization: Consolidated vec3 reduces the number of shared memory load instructions
+shared vec3 s_targetPixels[256];
 
-// Optimization: Minimized shared memory for inter-subgroup communication
+// Optimization: Tight bounds for pruning
+shared float s_subgroupTightBound[8]; 
+
+// Inter-subgroup reduction
 shared float s_subgroupBestSADs[32];
 shared uint s_subgroupBestIdxs[32];
 shared uint s_finalBestIdx;
@@ -28,131 +30,116 @@ void main() {
     ivec2 localCoord = ivec2(gl_LocalInvocationID.xy);
     ivec2 targetPixelPos = myBlockPos * 16 + localCoord;
     ivec2 gridSize = (imgSize + 15) / 16;
+    uint subgroupID = gl_SubgroupID;
 
     if (myBlockPos.x >= gridSize.x || myBlockPos.y >= gridSize.y) return;
 
-    // Load target block mean for pruning
-    // Using texelFetch on sampled image for better cache performance
+    // 1. Load data
     vec3 targetMean = texelFetch(targetMeanSampler, myBlockPos, 0).rgb;
-
-    // 1. Load into SoA Shared Memory
+    
+    vec3 pix = vec3(0.0);
     if (all(lessThan(targetPixelPos, imgSize))) {
-        vec3 pix = texelFetch(inputSampler2, targetPixelPos, 0).rgb;
-        s_targetR[threadIndex] = pix.r;
-        s_targetG[threadIndex] = pix.g;
-        s_targetB[threadIndex] = pix.b;
-    } else {
-        s_targetR[threadIndex] = 0.0;
-        s_targetG[threadIndex] = 0.0;
-        s_targetB[threadIndex] = 0.0;
+        pix = texelFetch(inputSampler2, targetPixelPos, 0).rgb;
     }
+    s_targetPixels[threadIndex] = pix;
     
     barrier();
 
-    // 2. Initial Guess: check the block at the same position as 'myBlockPos' 
-    // to establish a tight 'myBestSAD' bound early for pruning.
-    float myBestSAD = 1e20;
-    uint myBestIdx = 0;
-    
-    // Using texelFetch for a single initial candidate
-    uint initialCandIdx = clamp(myBlockPos.y * gridSize.x + myBlockPos.x, 0, (gridSize.x * gridSize.y) - 1);
-    ivec2 bBaseInitial = ivec2(myBlockPos.x, myBlockPos.y) << 4;
-    float initialSAD = 0.0;
-    uint strideInit = gl_SubgroupSize;
-    for (uint p = gl_SubgroupInvocationID; p < 256; p += (strideInit * 2)) {
-        ivec2 pCoord1 = ivec2(p & 0xF, p >> 4);
-        vec3 s1 = texelFetch(inputSampler1, bBaseInitial + pCoord1, 0).rgb;
-        initialSAD += abs(s_targetR[p] - s1.r) + abs(s_targetG[p] - s1.g) + abs(s_targetB[p] - s1.b);
-        uint p2 = p + strideInit;
-        if (p2 < 256) {
-            ivec2 pCoord2 = ivec2(p2 & 0xF, p2 >> 4);
-            vec3 s2 = texelFetch(inputSampler1, bBaseInitial + pCoord2, 0).rgb;
-            initialSAD += abs(s_targetR[p2] - s2.r) + abs(s_targetG[p2] - s2.g) + abs(s_targetB[p2] - s2.b);
-        }
-    }
-    initialSAD = subgroupAdd(initialSAD);
-    myBestSAD = initialSAD;
-    myBestIdx = initialCandIdx;
-
-    // 3. Search Loop
+    // 2. Setup Pruning
     uint totalBlocks = gridSize.x * gridSize.y;
     uint gWidth = gridSize.x;
+    
+    vec3 mySelfMean = texelFetch(sourceMeanSampler, myBlockPos, 0).rgb;
+    float currentBound = dot(abs(targetMean - mySelfMean), vec3(256.0)) + 1.0; 
+    uint localBestIdx = uint(myBlockPos.y * gWidth + myBlockPos.x);
 
-    for (uint i = gl_SubgroupID; i < totalBlocks; i += gl_NumSubgroups) {
-        uint by = i / gWidth;
-        uint bx = i % gWidth;
-        ivec2 meanCoord = ivec2(bx, by);
+    // 3. Search Loop (Leaner & Faster)
+    uint step = gl_NumSubgroups;
+    uint i = gl_SubgroupID; 
+    uint bx = i % gWidth;
+    uint by = i / gWidth;
 
-        // --- PRUNING PASS ---
-        // First check the SAD of the means. If it's too high, skip the 256-pixel loop.
-        vec3 sourceMean = texelFetch(sourceMeanSampler, meanCoord, 0).rgb;
-        float meanSAD = abs(targetMean.r - sourceMean.r) + abs(targetMean.g - sourceMean.g) + abs(targetMean.b - sourceMean.b);
-        
-        // MATHEMATICAL GUARANTEE: pixelSAD >= meanSAD * 256.0
-        // Because |sum(a-b)/256| <= sum(|a-b|)/256
-        // If the MINIMUM possible pixelSAD is already worse than our best, prune it.
-        if (meanSAD * 256.0 >= myBestSAD) continue; 
+    for (; i < totalBlocks; i += step) {
+        vec3 sourceMean = texelFetch(sourceMeanSampler, ivec2(bx, by), 0).rgb;
+        float meanSAD256 = dot(abs(targetMean - sourceMean), vec3(256.0));
 
-        ivec2 bBase = meanCoord << 4; 
-                
-        float currentBlockSAD = 0.0;
-        uint stride = gl_SubgroupSize;
+        // Use 'subgroupAny' to keep the subgroup moving together (reduces divergence)
+        if (subgroupAny(meanSAD256 < currentBound)) {
+            ivec2 bBase = ivec2(bx, by) << 4; 
+            
+            // --- COARSE PIXEL CHECK ---
+            float coarseSAD = 0.0;
+            for (uint p = gl_SubgroupInvocationID; p < 64; p += gl_SubgroupSize) {
+                uint pIdx = p << 2;
+                vec3 s_pix = texelFetch(inputSampler1, bBase + ivec2(pIdx & 0xF, pIdx >> 4), 0).rgb;
+                coarseSAD += dot(abs(s_targetPixels[pIdx] - s_pix), vec3(1.0));
+            }
+            coarseSAD = subgroupAdd(coarseSAD);
+            
+            // Tighten the check: only do full SAD if coarse check is promising
+            if (subgroupAny(coarseSAD * 4.0 < currentBound)) {
+                float fullSAD = 0.0;
+                for (uint p = gl_SubgroupInvocationID; p < 256; p += gl_SubgroupSize) {
+                    vec3 s_pix = texelFetch(inputSampler1, bBase + ivec2(p & 0xF, p >> 4), 0).rgb;
+                    fullSAD += dot(abs(s_targetPixels[p] - s_pix), vec3(1.0));
+                }
+                fullSAD = subgroupAdd(fullSAD);
 
-        // Optimization: Manual Unrolling (Factor of 2)
-        for (uint p = gl_SubgroupInvocationID; p < 256; p += (stride * 2)) {
-            // Pixel 1
-            ivec2 pCoord1 = ivec2(p & 0xF, p >> 4);
-            vec3 s1 = texelFetch(inputSampler1, bBase + pCoord1, 0).rgb;
-            currentBlockSAD += abs(s_targetR[p] - s1.r) + abs(s_targetG[p] - s1.g) + abs(s_targetB[p] - s1.b);
-
-            // Pixel 2
-            uint p2 = p + stride;
-            if (p2 < 256) {
-                ivec2 pCoord2 = ivec2(p2 & 0xF, p2 >> 4);
-                vec3 s2 = texelFetch(inputSampler1, bBase + pCoord2, 0).rgb;
-                currentBlockSAD += abs(s_targetR[p2] - s2.r) + abs(s_targetG[p2] - s2.g) + abs(s_targetB[p2] - s2.b);
+                if (fullSAD < currentBound) {
+                    currentBound = fullSAD;
+                    localBestIdx = i;
+                }
+                // Sync the best result within the subgroup
+                float bestInSub = subgroupMin(currentBound);
+                currentBound = bestInSub; 
             }
         }
 
-        currentBlockSAD = subgroupAdd(currentBlockSAD);
-
-        // SYNC: Update myBestSAD for ALL threads in the subgroup so the NEXT candidate prunes correctly
-        if (currentBlockSAD < myBestSAD) {
-            myBestSAD = currentBlockSAD;
-            myBestIdx = i;
+        // IMPROVED ADDRESS MATH: Avoid % and / inside the hot loop
+        bx += step;
+        if (bx >= gWidth) {
+            bx -= gWidth;
+            by += 1;
+            // Handle cases where step > gWidth (rare but possible)
+            while (bx >= gWidth) { bx -= gWidth; by += 1; }
         }
     }
 
-    // 3. Reduction using Subgroup-Friendly Shared Memory
+    
+    // --- 4 & 5. COMBINED REDUCTION ---
+    float subMinSAD = subgroupMin(currentBound);
+    uvec4 winnerBallot = subgroupBallot(currentBound == subMinSAD);
+    uint winnerLane = subgroupBallotFindLSB(winnerBallot); 
+    uint subBestIdx = subgroupShuffle(localBestIdx, winnerLane);
+
     if (subgroupElect()) {
-        s_subgroupBestSADs[gl_SubgroupID] = myBestSAD;
-        s_subgroupBestIdxs[gl_SubgroupID] = myBestIdx;
+        s_subgroupBestSADs[subgroupID] = subMinSAD;
+        s_subgroupBestIdxs[subgroupID] = subBestIdx;
     }
-
     barrier();
 
-    // Only one subgroup handles the final comparison to maximize occupancy
-    if (gl_SubgroupID == 0) {
-        float finalBestSAD = s_subgroupBestSADs[threadIndex];
-        uint finalBestIdx = s_subgroupBestIdxs[threadIndex];
+    // Final Pick (Cleaned up redundant block)
+    if (subgroupID == 0) {
+        bool isValid = threadIndex < gl_NumSubgroups;
+        float finalSAD = isValid ? s_subgroupBestSADs[threadIndex] : 1e20;
+        uint finalIdx = isValid ? s_subgroupBestIdxs[threadIndex] : 0;
         
-        // Use subgroup min to find the workgroup best without a loop
-        float workgroupMinSAD = subgroupMin(threadIndex < gl_NumSubgroups ? finalBestSAD : 1e20);
+        float wgMin = subgroupMin(finalSAD);
+        uvec4 wgWinnerBallot = subgroupBallot(finalSAD == wgMin && isValid);
+        uint wgWinnerLane = subgroupBallotFindLSB(wgWinnerBallot);
         
-        if (finalBestSAD == workgroupMinSAD && threadIndex < gl_NumSubgroups) {
-            s_finalBestIdx = finalBestIdx;
-        }
+        uint winnerFinalIdx = subgroupShuffle(finalIdx, wgWinnerLane);
+        if (subgroupElect()) s_finalBestIdx = winnerFinalIdx;
     }
-
     barrier();
 
-    // 4. Export
-    uint bestBY = s_finalBestIdx / gWidth;
-    uint bestBX = s_finalBestIdx % gWidth;
-    ivec2 bestSourcePixelPos = (ivec2(bestBX, bestBY) << 4) + localCoord;
+    // 6. Final Export
+    uint resBY = s_finalBestIdx / gWidth;
+    uint resBX = s_finalBestIdx % gWidth;
+    ivec2 sourceCoord = (ivec2(resBX, resBY) << 4) + localCoord;
 
     if (all(lessThan(targetPixelPos, imgSize))) {
-        vec4 color = texelFetch(inputSampler1, bestSourcePixelPos, 0);
+        vec4 color = texelFetch(inputSampler1, sourceCoord, 0);
         imageStore(outputImage, targetPixelPos, color);
     }
 }
