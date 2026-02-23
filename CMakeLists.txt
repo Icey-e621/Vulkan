@@ -2,12 +2,6 @@ cmake_minimum_required(VERSION 3.10)
 
 project(HelloTriangle)
 
-set(CMAKE_C_STANDARD 20)
-set(CMAKE_CXX_STANDARD 20)  
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-
 # 2. Fix for MSVC (Visual Studio) specifically
 # MSVC reports 199711 by default regardless of the version unless you set this flag
 if(MSVC)
@@ -18,6 +12,16 @@ find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(tinyobjloader REQUIRED)
+
+## set cmake standards ONLY for my file not libraries
+set(CMAKE_C_STANDARD 20)
+set(CMAKE_CXX_STANDARD 20)  
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+
+#Set static linking
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # HERE WE ARE GONNA COMPILE SHADERS
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
@@ -74,7 +78,7 @@ add_custom_command(TARGET Main POST_BUILD
 add_custom_target(Package
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:Main> ${CMAKE_BINARY_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:Main>/glfw3.dll ${CMAKE_BINARY_DIR}/dist/
+    # COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:Main>/glfw3.dll ${CMAKE_BINARY_DIR}/dist/
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/shaders
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/textures
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SHADERS_COMPILED} ${CMAKE_BINARY_DIR}/dist/shaders

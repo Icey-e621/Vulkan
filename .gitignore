@@ -2,3 +2,4 @@ build/
 textures/**
 *.spv
 models/**
+vcpkg_installed/
