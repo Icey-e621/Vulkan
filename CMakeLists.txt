@@ -54,6 +54,7 @@ target_link_libraries(Main
     tinyobjloader::tinyobjloader
 )
 
+#validation layers
 target_compile_definitions(Main PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 add_dependencies(Main Shaders)
 
@@ -72,15 +73,16 @@ add_custom_command(TARGET Main POST_BUILD
 
 # Custom target to package the application for distribution
 add_custom_target(Package
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:Main> ${CMAKE_BINARY_DIR}/dist/
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/SIMD-gpu
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:Main> ${CMAKE_BINARY_DIR}/SIMD-gpu/
 
-    # COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:Main>/glfw3.dll ${CMAKE_BINARY_DIR}/dist/
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/shaders
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/dist/textures
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SHADERS_COMPILED} ${CMAKE_BINARY_DIR}/dist/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/frutas.jpg ${CMAKE_BINARY_DIR}/dist/textures/
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/aves.jpg ${CMAKE_BINARY_DIR}/dist/textures/
-    COMMENT "Packaging application to ${CMAKE_BINARY_DIR}/dist"
+    # COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:Main>/glfw3.dll ${CMAKE_BINARY_DIR}/SIMD-gpu/
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/SIMD-gpu/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/SIMD-gpu/textures
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SHADERS_COMPILED} ${CMAKE_BINARY_DIR}/SIMD-gpu/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/frutas.jpg ${CMAKE_BINARY_DIR}/SIMD-gpu/textures/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/aves.jpg ${CMAKE_BINARY_DIR}/SIMD-gpu/textures/
+    COMMAND ${CMAKE_COMMAND} -E tar "cf" "SIMD-gpu.zip" --format=zip ${CMAKE_BINARY_DIR}/SIMD-gpu
+    COMMENT "Packaging application to ${CMAKE_BINARY_DIR}/SIMD-gpu"
     DEPENDS Main
 )

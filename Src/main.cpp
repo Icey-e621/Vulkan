@@ -8,6 +8,7 @@
 #include <stb_image_write.h>
 #include <tiny_obj_loader.h>
 #include <future>
+#include <mutex>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -110,6 +111,8 @@ private:
 #pragma region Members
     // save hadle of future
     std::future<void> handle_jpg;
+    // mutex to protect command pool access from multiple threads
+    std::mutex commandPoolMutex;
     // multisampling count
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
     // multisampling extra image buffer
@@ -1021,6 +1024,7 @@ private:
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
 
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
         if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS)
         {
             throw std::runtime_error("failed to allocate command buffers!");
@@ -1629,9 +1633,12 @@ private:
         {
             createInfo.enabledLayerCount = 0;
         }
-
-        if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS)
+        VkResult result = vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
+        if (result != VK_SUCCESS)
         {
+            if (result == VK_ERROR_FEATURE_NOT_PRESENT){
+                throw std::runtime_error("queued extension not supported by this gpu!");
+            }
             throw std::runtime_error("failed to create logical device!");
         }
         vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
@@ -1682,15 +1689,13 @@ private:
             swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-            swapChainAdequate &&
-            deviceFeatures.samplerAnisotropy;
-
         bool basicSuitability = //isNotIGPU &&
             deviceFeatures.geometryShader &&
             indices.isComplete() &&
             extensionsSupported &&
             swapChainAdequate &&
-            deviceFeatures.samplerAnisotropy;
+            deviceFeatures.samplerAnisotropy &&
+            deviceFeatures.sampleRateShading;
 
         // Check for subgroup support in compute stage
         VkPhysicalDeviceSubgroupProperties subgroupProperties{};
@@ -2174,8 +2179,10 @@ private:
         createInfo.ppEnabledExtensionNames = Requiredextensions.data();
 
         // instance saved in instance
-        if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS)
+        VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
+        if (result != VK_SUCCESS)
         {
+            std::cout << "hey, error is " << result << std::endl;
             throw std::runtime_error("failed to create instance!");
         }
     }
@@ -2610,6 +2617,7 @@ private:
     }
     VkCommandBuffer beginSingleTimeCommands()
     {
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -2640,6 +2648,7 @@ private:
         vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
         vkQueueWaitIdle(graphicsQueue);
 
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
     }
 
@@ -2654,14 +2663,17 @@ private:
                      stagingBuffer, stagingBufferMemory);
 
         // Create a command buffer for the copy
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = commandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-
         VkCommandBuffer commandBuffer;
-        vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+        {
+            std::lock_guard<std::mutex> lock(commandPoolMutex);
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool = commandPool;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+        }
 
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2730,7 +2742,12 @@ private:
         std::cout << "Saved mosaic image to momsaic_out.png" << std::endl;
 
         vkUnmapMemory(device, stagingBufferMemory);
-        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+        
+        {
+            std::lock_guard<std::mutex> lock(commandPoolMutex);
+            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+        }
+        
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
     }
