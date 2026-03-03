@@ -47,3 +47,52 @@ void main() {
         }
     }
 }
+
+
+
+// // VERSION 2
+
+// #version 450
+// #extension GL_KHR_shader_subgroup_arithmetic : require
+
+// layout(local_size_x = 16, local_size_y = 16) in;
+
+// layout(binding = 0, rgba8) uniform readonly image2D inputImage;
+// layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
+
+// // Shared memory to hold partial sums from each subgroup
+// shared vec4 subgroupSums[8]; // 256 threads / 32 min subgroup size = 8
+
+// void main() {
+//     ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+//     vec4 color = imageLoad(inputImage, pixelCoord);
+
+//     // Step 1: SIMD-style sum within the subgroup
+//     vec4 sum = subgroupAdd(color);
+
+//     // Step 2: The "leader" of each subgroup writes to shared memory
+//     if (subgroupElect()) {
+//         subgroupSums[gl_SubgroupID] = sum;
+//     }
+
+//     // Ensure all subgroups have finished writing
+//     memoryBarrierShared();
+//     barrier();
+
+//     // Step 3: Use the first subgroup to sum the partial results
+//     if (gl_SubgroupID == 0) {
+//         // Read from shared memory (only up to the number of subgroups actually used)
+//         vec4 partialSum = (gl_SubgroupInvocationID < gl_NumSubgroups) 
+//                           ? subgroupSums[gl_SubgroupInvocationID] 
+//                           : vec4(0.0);
+        
+//         vec4 totalSum = subgroupAdd(partialSum);
+
+//         // Step 4: Calculate mean and write to the output
+//         if (subgroupElect()) {
+//             vec4 meanColor = totalSum / (16.0 * 16.0);
+//             // Write to the top-left coordinate of the 16x16 block in the output image
+//             imageStore(outputImage, pixelCoord / 16, meanColor);
+//         }
+//     }
+// }

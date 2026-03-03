@@ -881,7 +881,7 @@ private:
 
         vkCmdPipelineBarrier(commandBuffer,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0,
+                             VK_DEPENDENCY_BY_REGION_BIT,
                              0, nullptr,
                              0, nullptr,
                              2, barriers);
@@ -891,7 +891,7 @@ private:
 
         // Bind all resources (Set 2)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipelineLayout, 0, 1, &computeDescriptorSets[2], 0, nullptr);
-
+    
         // Dispatch one workgroup per output block (same as grid size)
         vkCmdDispatch(commandBuffer, gridWidth, gridHeight, 1);
 
@@ -1597,13 +1597,21 @@ private:
     bool isDeviceSuitable(VkPhysicalDevice device)
     {
         VkPhysicalDeviceProperties deviceProperties;
+        // VkPhysicalDeviceSubgroupProperties subgroupProperties = {};
+        // subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
         VkPhysicalDeviceFeatures deviceFeatures;
         QueueFamilyIndices indices = findQueueFamilies(device);
 
+        // VkPhysicalDeviceProperties2 properties2 = {};
+        // properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        // properties2.pNext = &subgroupProperties;
+
         vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
         vkGetPhysicalDeviceProperties(device, &deviceProperties);
+        // vkGetPhysicalDeviceProperties2(device, &properties2);
 
         bool isNotIGPU = deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        // bool supportSIMDArithmetic = subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
         bool extensionsSupported = checkDeviceExtensionSupport(device);
 
         bool swapChainAdequate = false;
@@ -1614,11 +1622,12 @@ private:
         }
 
         return // isNotIGPU &&
-            deviceFeatures.geometryShader &&
-            indices.isComplete() &&
-            extensionsSupported &&
-            swapChainAdequate &&
-            deviceFeatures.samplerAnisotropy;
+            deviceFeatures.geometryShader 
+            && indices.isComplete()
+            && extensionsSupported
+            && swapChainAdequate
+            && deviceFeatures.samplerAnisotropy;
+            //&& supportSIMDArithmetic;
     }
     bool checkDeviceExtensionSupport(VkPhysicalDevice device)
     {

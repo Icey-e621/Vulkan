@@ -26,7 +26,7 @@ set(Vulkan_GLSLC_EXECUTABLE "glslc")
 foreach(SHADER IN LISTS SHADERS)
     get_filename_component(FILENAME ${SHADER} NAME)
     add_custom_command(OUTPUT ${SHADER_DIR}/${FILENAME}.spv
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${SHADER} -o ${SHADER_DIR}/${FILENAME}.spv
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE}  ${SHADER} -o ${SHADER_DIR}/${FILENAME}.spv
         DEPENDS ${SHADER}
         COMMENT "Compiling ${FILENAME}")
 list(APPEND SPV_SHADERS ${SHADER_DIR}/${FILENAME}.spv)
@@ -81,4 +81,5 @@ add_custom_target(Package
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/textures/aves.jpg ${CMAKE_BINARY_DIR}/dist/textures/
     COMMENT "Packaging application to ${CMAKE_BINARY_DIR}/dist"
     DEPENDS Main
+    VERBATIM
 )
